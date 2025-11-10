@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- generated on 2025-11-03 10:55:12 by Eclipse SUMO netedit Version 1.24.0
+<neteditConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/neteditConfiguration.xsd">
+
+    <input>
+        <sumo-net-file value="C:\Users\Owner\Documents\fall_2025\cs_693\SUMO_sim\base_compl\base_net.net.xml"/>
+    </input>
+
+    <output>
+        <output-file value="C:\Users\Owner\Documents\fall_2025\cs_693\SUMO_sim\base_compl\base_net.net.xml"/>
+    </output>
+
+    <processing>
+        <geometry.min-radius.fix.railways value="false"/>
+        <geometry.avoid-overlap value="false"/>
+        <geometry.max-grade.fix value="false"/>
+        <offset.disable-normalization value="true"/>
+        <lefthand value="0"/>
+    </processing>
+
+    <junctions>
+        <no-turnarounds value="true"/>
+        <junctions.corner-detail value="0"/>
+        <junctions.limit-turn-speed value="-1.00"/>
+        <rectangular-lane-cut value="0"/>
+    </junctions>
+
+    <pedestrian>
+        <walkingareas value="0"/>
+    </pedestrian>
+
+</neteditConfiguration>
+-->
+
+<net version="1.20" avoidOverlap="0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/net_file.xsd">
+
+    <location netOffset="500.00,0.00" convBoundary="371.21,-319.02,1315.27,86.15" origBoundary="-500.00,0.00,2000.00,500.00" projParameter="!"/>
+
+    <edge id=":clusterJ10_J11_0" function="internal">
+        <lane id=":clusterJ10_J11_0_0" index="0" speed="13.89" length="9.03" shape="1013.19,-129.42 1013.54,-126.97 1014.59,-125.22 1016.34,-124.17 1018.79,-123.82"/>
+    </edge>
+    <edge id=":clusterJ10_J11_1" function="internal">
+        <lane id=":clusterJ10_J11_1_0" index="0" speed="13.89" length="11.20" shape="1007.59,-123.82 1018.79,-123.82"/>
+        <lane id=":clusterJ10_J11_1_1" index="1" speed="13.89" length="11.20" shape="1007.59,-120.62 1018.79,-120.62"/>
+        <lane id=":clusterJ10_J11_1_2" index="2" speed="13.89" length="11.20" shape="1007.59,-117.42 1018.79,-117.42"/>
+    </edge>
+    <edge id=":clusterJ2_J5_0" function="internal">
+        <lane id=":clusterJ2_J5_0_0" index="0" speed="13.89" length="11.20" shape="627.34,-123.82 638.54,-123.82"/>
+        <lane id=":clusterJ2_J5_0_1" index="1" speed="13.89" length="11.20" shape="627.34,-120.62 638.54,-120.62"/>
+        <lane id=":clusterJ2_J5_0_2" index="2" speed="13.89" length="11.20" shape="627.34,-117.42 638.54,-117.42"/>
+    </edge>
+    <edge id=":clusterJ2_J5_3" function="internal">
+        <lane id=":clusterJ2_J5_3_0" index="0" speed="13.89" length="9.03" shape="627.34,-117.42 629.79,-117.07 631.54,-116.02 632.59,-114.27 632.94,-111.82"/>
+    </edge>
+
+    <edge id="E0" from="J0" to="clusterJ2_J5" priority="-1" shape="371.21,-115.82 630.57,-115.82">
+        <lane id="E0_0" index="0" speed="13.89" length="256.13" shape="371.21,-123.82 627.34,-123.82"/>
+        <lane id="E0_1" index="1" speed="13.89" length="256.13" shape="371.21,-120.62 627.34,-120.62"/>
+        <lane id="E0_2" index="2" speed="13.89" length="256.13" shape="371.21,-117.42 627.34,-117.42"/>
+    </edge>
+    <edge id="E0.259" from="clusterJ2_J5" to="clusterJ10_J11" priority="-1" shape="630.57,-115.82 1011.97,-115.82">
+        <lane id="E0.259_0" index="0" speed="13.89" length="369.05" shape="638.54,-123.82 1007.59,-123.82"/>
+        <lane id="E0.259_1" index="1" speed="13.89" length="369.05" shape="638.54,-120.62 1007.59,-120.62"/>
+        <lane id="E0.259_2" index="2" speed="13.89" length="369.05" shape="638.54,-117.42 1007.59,-117.42"/>
+    </edge>
+    <edge id="E0.640" from="clusterJ10_J11" to="J1" priority="-1" shape="1011.97,-115.82 1315.27,-115.82">
+        <lane id="E0.640_0" index="0" speed="13.89" length="296.48" shape="1018.79,-123.82 1315.27,-123.82"/>
+        <lane id="E0.640_1" index="1" speed="13.89" length="296.48" shape="1018.79,-120.62 1315.27,-120.62"/>
+        <lane id="E0.640_2" index="2" speed="13.89" length="296.48" shape="1018.79,-117.42 1315.27,-117.42"/>
+    </edge>
+    <edge id="E1" from="clusterJ2_J5" to="J3" priority="-1" shape="631.34,-114.38 631.34,86.15">
+        <lane id="E1_0" index="0" speed="13.89" length="197.97" shape="632.94,-111.82 632.94,86.15"/>
+    </edge>
+    <edge id="E2" from="J9" to="clusterJ10_J11" priority="-1" shape="1011.59,-319.02 1011.59,-125.51">
+        <lane id="E2_0" index="0" speed="13.89" length="189.60" shape="1013.19,-319.02 1013.19,-129.42"/>
+    </edge>
+
+    <junction id="J0" type="dead_end" x="371.21" y="-115.82" incLanes="" intLanes="" shape="371.21,-115.82 371.21,-125.42"/>
+    <junction id="J1" type="dead_end" x="1315.27" y="-115.82" incLanes="E0.640_0 E0.640_1 E0.640_2" intLanes="" shape="1315.27,-125.42 1315.27,-115.82"/>
+    <junction id="J3" type="dead_end" x="631.34" y="86.15" incLanes="E1_0" intLanes="" shape="634.54,86.15 631.34,86.15"/>
+    <junction id="J9" type="dead_end" x="1011.59" y="-319.02" incLanes="" intLanes="" shape="1011.59,-319.02 1014.79,-319.02"/>
+    <junction id="clusterJ10_J11" type="priority" x="1011.78" y="-120.66" incLanes="E2_0 E0.259_0 E0.259_1 E0.259_2" intLanes=":clusterJ10_J11_0_0 :clusterJ10_J11_1_0 :clusterJ10_J11_1_1 :clusterJ10_J11_1_2" shape="1018.79,-115.82 1018.79,-125.42 1014.79,-129.42 1011.59,-129.42 1007.59,-125.42 1007.59,-115.82">
+        <request index="0" response="1110" foes="1110" cont="0"/>
+        <request index="1" response="0000" foes="0001" cont="0"/>
+        <request index="2" response="0000" foes="0001" cont="0"/>
+        <request index="3" response="0000" foes="0001" cont="0"/>
+    </junction>
+    <junction id="clusterJ2_J5" type="priority" x="630.96" y="-115.10" incLanes="E0_0 E0_1 E0_2" intLanes=":clusterJ2_J5_0_0 :clusterJ2_J5_0_1 :clusterJ2_J5_0_2 :clusterJ2_J5_3_0" shape="631.34,-111.82 634.54,-111.82 638.54,-115.82 638.54,-125.42 627.34,-125.42 627.34,-115.82">
+        <request index="0" response="0000" foes="0000" cont="0"/>
+        <request index="1" response="0000" foes="0000" cont="0"/>
+        <request index="2" response="0000" foes="0000" cont="0"/>
+        <request index="3" response="0000" foes="0000" cont="0"/>
+    </junction>
+
+    <connection from="E0" to="E0.259" fromLane="0" toLane="0" via=":clusterJ2_J5_0_0" dir="s" state="M"/>
+    <connection from="E0" to="E0.259" fromLane="1" toLane="1" via=":clusterJ2_J5_0_1" dir="s" state="M"/>
+    <connection from="E0" to="E0.259" fromLane="2" toLane="2" via=":clusterJ2_J5_0_2" dir="s" state="M"/>
+    <connection from="E0" to="E1" fromLane="2" toLane="0" via=":clusterJ2_J5_3_0" dir="l" state="M"/>
+    <connection from="E0.259" to="E0.640" fromLane="0" toLane="0" via=":clusterJ10_J11_1_0" dir="s" state="M"/>
+    <connection from="E0.259" to="E0.640" fromLane="1" toLane="1" via=":clusterJ10_J11_1_1" dir="s" state="M"/>
+    <connection from="E0.259" to="E0.640" fromLane="2" toLane="2" via=":clusterJ10_J11_1_2" dir="s" state="M"/>
+    <connection from="E2" to="E0.640" fromLane="0" toLane="0" via=":clusterJ10_J11_0_0" dir="r" state="m"/>
+
+    <connection from=":clusterJ10_J11_0" to="E0.640" fromLane="0" toLane="0" dir="r" state="M"/>
+    <connection from=":clusterJ10_J11_1" to="E0.640" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":clusterJ10_J11_1" to="E0.640" fromLane="1" toLane="1" dir="s" state="M"/>
+    <connection from=":clusterJ10_J11_1" to="E0.640" fromLane="2" toLane="2" dir="s" state="M"/>
+    <connection from=":clusterJ2_J5_0" to="E0.259" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":clusterJ2_J5_0" to="E0.259" fromLane="1" toLane="1" dir="s" state="M"/>
+    <connection from=":clusterJ2_J5_0" to="E0.259" fromLane="2" toLane="2" dir="s" state="M"/>
+    <connection from=":clusterJ2_J5_3" to="E1" fromLane="0" toLane="0" dir="l" state="M"/>
+
+</net>
