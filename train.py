@@ -10,7 +10,7 @@ import os
 
 
 # Define macros for hyperparameters
-STEP_LENGTH = 0.1 # step length in seconds for SUMO and environment step
+STEP_LENGTH = 0.2 # 0.1 # step length in seconds for SUMO and environment step 0.1 is very slow so changed
 
 LEARNING_RATE = 1e-4
 N_STEPS = 512 #number of env steps PPO coellects before each update, it can be multiple episodes or one
@@ -21,7 +21,7 @@ CLIP_RANGE = 0.2
 ENT_COEF = 0.01
 VF_COEF = 0.5
 MAX_GRAD_NORM = 0.5
-TOTAL_TIMESTEPS = 500_000 #total timesteps to train the model
+TOTAL_TIMESTEPS = 200000 #500_000 #total timesteps to train the model
 MODEL_NAME = "ppo_sumo_lanechange"
 max_episode_steps = 256 #int(60 / STEP_LENGTH) * 2  # experimenting with 2 episode per update
 
