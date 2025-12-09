@@ -81,17 +81,21 @@ class SumoLaneChangeEnv(gym.Env):
         traci.start([                                   # launch SUMO with your config and step length
             sumo_binary,
             "-c", self.sumo_cfg_path,
-            "--step-length", str(self.step_length)  
+            "--step-length", str(self.step_length),
+            "--no-warnings", "true",
+            "--error-log", "NUL"  
         ])
 
         # pick the ego vehicle from the specified flow
         #option 1- of picking vehicle from a flow
         self._choose_ego_from_flow(self.ego_flow_id)  #need returns self.ego_id self.ego_id is defined in _choose_ego_from_flow()    
+        self._initial_lane_idx = traci.vehicle.getLaneIndex(self.ego_id)
+        route = traci.vehicle.getRoute(self.ego_id)
+        self._target_edge = route[-1]   # final destination edge for ego - last edge in the route
 
         # reset step counter
         self._steps = 0
         obs = self._get_state() #this has to be produce the 21 dims that goes to PPO agent 
-
 
         # Build info
         lane_idx = None
@@ -157,6 +161,14 @@ class SumoLaneChangeEnv(gym.Env):
     
         # termination condition
         terminated, truncated, reason, collision, success = self._check_done()
+
+        if terminated or truncated:
+            try:
+                edge_id = traci.vehicle.getRoadID(self.ego_id)
+            except Exception:
+                edge_id = None
+            #print(f"[EP END] steps={self._steps}, reason={reason}, " f"collision={collision}, success={success}, edge={edge_id}")
+
         # optional info dict (empty is fine)
         info = {
             "ego_id": self.ego_id,
@@ -282,54 +294,50 @@ class SumoLaneChangeEnv(gym.Env):
         success = False
         reason = None
 
-        # Check if ego still exists
         ego_exists = self.ego_id in traci.vehicle.getIDList()
-        
-        if not ego_exists:
-            # Ego was removed - could be collision, success, or normal exit
-            # Check success first
-            if self._reached_goal():
-                terminated = True
-                success = True
-                collision = False
-                reason = "goal_reached"
-            else:
-                # Check for collision using SUMO's collision detection
-                # You may need to check traci.simulation.getCollidingVehiclesIDList()
-                # or use other SUMO collision detection methods
-                try:
-                    colliding = traci.simulation.getCollidingVehiclesIDList()
-                    if self.ego_id in colliding:
-                        terminated = True
-                        collision = True
-                        success = False
-                        reason = "collision"
-                    else:
-                        # Normal exit (left network)
-                        terminated = True
-                        collision = False
-                        success = False
-                        reason = "exited"
-                except Exception:
-                    # Fallback: treat as collision if we can't determine
-                    terminated = True
-                    collision = True
-                    success = False
-                    reason = "ego_removed"
-        else:
-            # Ego still exists - check for success
-            if self._reached_goal():
-                terminated = True
-                success = True
-                collision = False
-                reason = "goal"
 
-        # Time/step limit reached (episode cap)
-        if not terminated and self._steps >= self._max_steps:
+        # --- 1) Check collisions & teleports first ---
+        try:
+            colliding = traci.simulation.getCollidingVehiclesIDList()
+            starting_teleports = traci.simulation.getStartingTeleportIDList()
+            #teleporting = traci.simulation.getTeleportingVehiclesIDList()
+        except Exception:
+            colliding = []
+            starting_teleports = []
+
+        if ego_exists and (self.ego_id in colliding or self.ego_id in starting_teleports):
+            # Treat any collision/teleport as episode failure
+            terminated = True
+            collision = True
+            success = False
+            reason = "collision_or_starting_teleport"
+            return terminated, truncated, reason, collision, success
+
+        # --- 2) Ego removed from simulation (not found anymore) ---
+        if not ego_exists:
+            # If it's gone and we didn't catch it as a collision/teleport above,
+            # treat this as a failure (you can refine this later if needed).
+            terminated = True
+            collision = True
+            success = False
+            reason = "ego_removed"
+            return terminated, truncated, reason, collision, success
+
+        # --- 3) Ego still exists: check for goal ---
+        if self._reached_goal():
+            terminated = True
+            success = True
+            collision = False
+            reason = "goal"
+            return terminated, truncated, reason, collision, success
+
+        # --- 4) Time/step limit reached (episode cap) ---
+        if self._steps >= self._max_steps:
             truncated = True
             reason = "timeout"
 
         return terminated, truncated, reason, collision, success
+
     
     def _reached_goal(self):
         """
@@ -344,17 +352,11 @@ class SumoLaneChangeEnv(gym.Env):
                 return False
             
             curr_lane_idx = traci.vehicle.getLaneIndex(self.ego_id)
-            road_id = traci.vehicle.getRoadID(self.ego_id)
-            
-        # Success: ego is in right-most lane (target lane)
-        # In SUMO, lane 0 = right-most lane
-            if curr_lane_idx == 0:
-                # Optional: check if ego is still on the main road (not exited)
-                # This depends on your network structure
-                # For example, if your off-ramp starts at edge "E2":
-                if "E2" not in road_id:  # Still on main road, not on off-ramp
-                    return True
-            
+            edge_id = traci.vehicle.getRoadID(self.ego_id)
+            x, y = traci.vehicle.getPosition(self.ego_id)
+
+            if edge_id == self._target_edge:
+                return True
             return False
         except Exception:
             return False   
