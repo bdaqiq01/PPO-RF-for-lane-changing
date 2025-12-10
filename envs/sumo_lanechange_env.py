@@ -5,6 +5,7 @@ import gymnasium as gym                        # Gym API for RL environments
 import numpy as np                # numerical arrays
 import traci                     # SUMO's TraCI Python client
 from gymnasium import spaces            # space definitions for obs/actions
+import random
 
 # your modules (paths unchanged)
 from controllers.longitudinal_idm import IDMController   # low-level longitudinal controller (IDM)
@@ -37,7 +38,8 @@ class SumoLaneChangeEnv(gym.Env):
                  max_steps,  #max steps per episode
                  ego_flow_id, 
                  idm_params = None,
-                 lateral_params = None):      # <— choose which flow to pull ego from
+                 lateral_params = None, 
+                 target_edge_id = None):      # <— choose which flow to pull ego from
         super().__init__()                     # Gym boilerplate
 
         self.sumo_cfg_path = sumo_cfg_path     # path to .sumocfg (loads base.net.xml, base.rou.xml, etc.)
@@ -47,6 +49,8 @@ class SumoLaneChangeEnv(gym.Env):
         self.dt = float(step_length)          # time delta for the reward function and jerk calc
         #self.prev_ego_state = None                     # will hold the chosen SUMO vehicle id, e.g., "f_0.3"
         self.ego_id = None                   # will hold the chosen SUMO vehicle id, e.g., "f_0.3"
+        self.target_edge_id = target_edge_id
+        self._initial_edge_id = None         # track starting edge to prevent immediate success
 
         # --- Gym spaces  ---
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(21,), dtype=np.float32)  # 21 continuous features
@@ -81,9 +85,9 @@ class SumoLaneChangeEnv(gym.Env):
         traci.start([                                   # launch SUMO with your config and step length
             sumo_binary,
             "-c", self.sumo_cfg_path,
-            "--step-length", str(self.step_length),
-            "--no-warnings", "true",
-            "--error-log", "NUL"  
+            "--step-length", str(self.step_length) #,
+            #"--no-warnings", "true",
+            #"--error-log", "NUL"  
         ])
 
         # pick the ego vehicle from the specified flow
@@ -91,7 +95,13 @@ class SumoLaneChangeEnv(gym.Env):
         self._choose_ego_from_flow(self.ego_flow_id)  #need returns self.ego_id self.ego_id is defined in _choose_ego_from_flow()    
         self._initial_lane_idx = traci.vehicle.getLaneIndex(self.ego_id)
         route = traci.vehicle.getRoute(self.ego_id)
-        self._target_edge = route[-1]   # final destination edge for ego - last edge in the route
+        #self._target_edge =  route[0]  # final destination edge for ego - last edge in the route
+        
+        # Store initial edge to prevent immediate success if vehicle starts on target edge
+        try:
+            self._initial_edge_id = traci.vehicle.getRoadID(self.ego_id)
+        except Exception:
+            self._initial_edge_id = None
 
         # reset step counter
         self._steps = 0
@@ -167,7 +177,7 @@ class SumoLaneChangeEnv(gym.Env):
                 edge_id = traci.vehicle.getRoadID(self.ego_id)
             except Exception:
                 edge_id = None
-            #print(f"[EP END] steps={self._steps}, reason={reason}, " f"collision={collision}, success={success}, edge={edge_id}")
+            print(f"[EP END] steps={self._steps}, reason={reason}, " f"collision={collision}, success={success}, edge={edge_id}")
 
         # optional info dict (empty is fine)
         info = {
@@ -216,32 +226,46 @@ class SumoLaneChangeEnv(gym.Env):
         # Below assumes you've updated get_state to accept ego_id:
         return get_state(self.ego_id)
 
-    def _choose_ego_from_flow(self, flow_prefix: str, warmup_steps: int = 200, timeout_steps: int = 2000):
+    def _choose_ego_from_flow(self, flow_prefix: str, warmup_steps: int = 5, timeout_steps: int = 2000):
         """
         Wait for vehicles to spawn, then pick one whose id starts with e.g. 'f_0.'.
         Your base.rou.xml defines flows f_0, f_1, f_2, so SUMO makes ids like 'f_0.0', 'f_0.1', ...
+        Prefers vehicles that are still on their starting edge (early in journey).
         """
-        # optional warmup: let the flows inject some vehicles first
         for _ in range(warmup_steps):
             traci.simulationStep()
 
         steps = 0
         while steps < timeout_steps:
+            traci.simulationStep()
             ids = traci.vehicle.getIDList()
             # prefer vehicles from the requested flow
             candidates = [vid for vid in ids if vid.startswith(flow_prefix + ".")]
-            if not candidates:
-                # fallback: any flow-type vehicle (contains a dot, typical SUMO flow naming)
-                candidates = [vid for vid in ids if "." in vid]
 
             if candidates:
-                self.ego_id = candidates[0]                 # pick the first or randomize
-                # put ego fully under RL control (disable SUMO’s built-in models for this vehicle)
+                # Prefer vehicles that are still on their starting edge (early in journey)
+                # Get the route's starting edge for vehicles in this flow
+                early_candidates = []
+                for vid in candidates:
+                    try:
+                        route = traci.vehicle.getRoute(vid)
+                        if len(route) > 0:
+                            start_edge = route[0]
+                            current_edge = traci.vehicle.getRoadID(vid)
+                            # Prefer vehicles still on starting edge
+                            if current_edge == start_edge:
+                                early_candidates.append(vid)
+                    except Exception:
+                        pass
+                
+                # Use early candidates if available, otherwise use all candidates
+                selected_candidates = early_candidates if early_candidates else candidates
+                self.ego_id = random.choice(selected_candidates)
+                
+                # put ego fully under RL control (disable SUMO's built-in models for this vehicle)
                 traci.vehicle.setSpeedMode(self.ego_id, 0)        # you control speed
                 traci.vehicle.setLaneChangeMode(self.ego_id, 0)   # you control lane changes
                 return
-
-            traci.simulationStep()
             steps += 1
 
         raise RuntimeError(
@@ -310,7 +334,7 @@ class SumoLaneChangeEnv(gym.Env):
             terminated = True
             collision = True
             success = False
-            reason = "collision_or_starting_teleport"
+            reason = "collision_or_teleport"
             return terminated, truncated, reason, collision, success
 
         # --- 2) Ego removed from simulation (not found anymore) ---
@@ -341,23 +365,28 @@ class SumoLaneChangeEnv(gym.Env):
     
     def _reached_goal(self):
         """
-        Check if ego successfully reached target lane (right lane) before exit.
+        Check if ego successfully reached target edge.
         Returns True if:
-        - Ego is in the right-most lane (lane index 0)
-        - Ego hasn't exited the network yet
-        - Optionally: ego is past a certain position/edge
+        - Ego is on the target edge
+        - Ego wasn't already on the target edge at episode start (prevents immediate success)
+        - Ego still exists in the simulation
         """
         try:
             if self.ego_id not in traci.vehicle.getIDList():
                 return False
             
-            curr_lane_idx = traci.vehicle.getLaneIndex(self.ego_id)
             edge_id = traci.vehicle.getRoadID(self.ego_id)
-            x, y = traci.vehicle.getPosition(self.ego_id)
-
-            if edge_id == self._target_edge:
-                return True
-            return False
+            
+            # Check if we're on the target edge
+            if edge_id != self.target_edge_id:
+                return False
+            
+            # IMPORTANT: Only count as success if we weren't already on target edge at start
+            # This prevents immediate success when vehicle spawns on target edge
+            if self._initial_edge_id == self.target_edge_id:
+                return False  # Vehicle started on target edge, so reaching it isn't an achievement
+            
+            return True
         except Exception:
             return False   
 

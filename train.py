@@ -35,12 +35,12 @@ IDM_S0 = 2.0         # m
 # --- Lateral controller ---
 LANE_CHANGE_DURATION = 3  # seconds lane change duration
 LANE_CHANGE_DETECTION_DISTANCE = 10  # meters lane change detection distance 
-FLOW_ID = 'f_0'   #flow id to choose the ego vehicle from
-
+FLOW_ID = 'f_2'   #flow id to choose the ego vehicle from
+OFFRAMP_EDGE_ID = "E2"  #target edge
 
 
 env = SumoLaneChangeEnv(
-    sumo_cfg_path="SUMO_sim/base_compl/base.sumocfg", 
+    sumo_cfg_path="SUMO_sim/base2_compl/2lane_oneOnOff.sumocfg", 
     step_length=STEP_LENGTH, 
     max_steps=max_episode_steps, 
     ego_flow_id=FLOW_ID, 
@@ -53,7 +53,8 @@ env = SumoLaneChangeEnv(
                         #Lateral parameters
                         lateral_params=dict(
                             lane_change_duration=LANE_CHANGE_DURATION, 
-                            lane_change_detection_distance=LANE_CHANGE_DETECTION_DISTANCE)) 
+                            lane_change_detection_distance=LANE_CHANGE_DETECTION_DISTANCE), 
+                        target_edge_id = OFFRAMP_EDGE_ID) 
 
 # (Optional) small MLP that fits a 21-D state → policy/value
 policy_kwargs = dict(
@@ -67,7 +68,7 @@ os.makedirs('./checkpoints/', exist_ok=True)
 
 # Create a separate evaluation environment
 eval_env = SumoLaneChangeEnv(
-    sumo_cfg_path="SUMO_sim/base_compl/base.sumocfg", 
+    sumo_cfg_path="SUMO_sim/base2_compl/2lane_oneOnOff.sumocfg", 
     step_length=STEP_LENGTH, 
     max_steps=max_episode_steps, 
     ego_flow_id=FLOW_ID, 
@@ -78,7 +79,8 @@ eval_env = SumoLaneChangeEnv(
         s0=IDM_S0), 
     lateral_params=dict(
         lane_change_duration=LANE_CHANGE_DURATION, 
-        lane_change_detection_distance=LANE_CHANGE_DETECTION_DISTANCE))
+        lane_change_detection_distance=LANE_CHANGE_DETECTION_DISTANCE), 
+    target_edge_id = OFFRAMP_EDGE_ID)
 
 model = PPO(
     "MlpPolicy",
