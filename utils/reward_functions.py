@@ -160,33 +160,8 @@ def compute_reward(
     # Full safety reward: R_safety = R_collision + R_p
     R_safety = R_collision + rp
 
-    # ---------------- 4) ROUTE COMPLIANCE: Penalty for wrong lane on E0.212 ---------------- 
-    # Vehicles must be in lane 0 of E0.212 to reach E2 (off-ramp)
-    # Apply penalty if vehicle is on E0.212 but not in lane 0
-    R_route = 0.0
-    try:
-        edge_id = traci.vehicle.getRoadID(ego_id)
-        lane_idx = traci.vehicle.getLaneIndex(ego_id)
-        
-        if edge_id == "E0.212" and lane_idx != 0:
-            # Penalty increases as vehicle approaches end of edge
-            try:
-                lane_id = traci.vehicle.getLaneID(ego_id)
-                lane_length = traci.lane.getLength(lane_id)
-                lane_pos = traci.vehicle.getLanePosition(ego_id)
-                # Normalized position (0 = start, 1 = end)
-                pos_ratio = lane_pos / max(lane_length, 1.0)
-                # Stronger penalty near the end (where it will get stuck)
-                # Base penalty: -5.0, increases to -20.0 near end
-                R_route = -5.0 - 15.0 * (pos_ratio ** 2)  # Quadratic increase
-            except Exception:
-                # Fallback: fixed penalty if we can't get position
-                R_route = -10.0
-    except Exception:
-        R_route = 0.0
-
-    # ---------------- 5) TOTAL ---------------- 
-    R_total = R_comfort + R_eff + R_safety + R_route
+    # ---------------- 4) TOTAL ----------------
+    R_total = R_comfort + R_eff + R_safety
 
     components = {
         "R_total": R_total,
