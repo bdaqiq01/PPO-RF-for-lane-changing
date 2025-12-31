@@ -172,7 +172,6 @@ def compute_reward(
         "R_speed": R_speed,
         "R_collision": R_collision,
         "R_safety": R_safety,
-        "R_route": R_route,
         "jerk_long": j_lon,
         "jerk_lat": j_lat,
         "near_gap_D": D,

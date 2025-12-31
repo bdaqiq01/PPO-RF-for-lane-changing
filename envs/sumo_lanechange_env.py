@@ -222,7 +222,7 @@ class SumoLaneChangeEnv(gym.Env):
         # Below assumes you've updated get_state to accept ego_id:
         return get_state(self.ego_id)
 
-    def _choose_ego_from_flow(self, flow_prefix: str, warmup_steps: int = 5, timeout_steps: int = 2000):
+    def _choose_ego_from_flow(self, flow_prefix: str, warmup_steps: int = 1, timeout_steps: int = 2000):
         """
         Wait for vehicles to spawn, then pick one whose id starts with e.g. 'f_0.'.
         Your base.rou.xml defines flows f_0, f_1, f_2, so SUMO makes ids like 'f_0.0', 'f_0.1', ...
