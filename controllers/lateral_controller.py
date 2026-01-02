@@ -53,12 +53,10 @@ class LateralController:
                 traci.vehicle.changeLane(ego_id, target_idx_right, self.duration)
             # else already in right-most lane -> effectively lane keeping
 
-        # 2: abort lane change (go back left/original lane)
+        # 2: abort lane change (Keep original lane)
         elif lat_cmd == 2:
-            # "abort" = go one lane to the left (back toward original lane)
-            if curr_idx < n_lanes - 1:
-                back_idx = curr_idx + 1
-                traci.vehicle.changeLane(ego_id, back_idx, self.duration)
-            # if already left-most, just stay
+            # if abort keep curent lane
+            traci.vehicle.changeLane(ego_id, curr_idx, self.duration)
+            # if already left-most, just stay 
 
         # other lat_cmd values are silently ignored

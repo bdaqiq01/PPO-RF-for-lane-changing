@@ -39,7 +39,8 @@ class SumoLaneChangeEnv(gym.Env):
                  ego_flow_id, 
                  idm_params = None,
                  lateral_params = None, 
-                 target_edge_id = None):      # <— choose which flow to pull ego from
+                 target_edge_id = None,      # <— choose which flow to pull ego from
+                 Control_Zone_edge = None):
         super().__init__()                     # Gym boilerplate
 
         self.sumo_cfg_path = sumo_cfg_path     # path to .sumocfg (loads base.net.xml, base.rou.xml, etc.)
@@ -50,7 +51,8 @@ class SumoLaneChangeEnv(gym.Env):
         #self.prev_ego_state = None                     # will hold the chosen SUMO vehicle id, e.g., "f_0.3"
         self.ego_id = None                   # will hold the chosen SUMO vehicle id, e.g., "f_0.3"
         self.target_edge_id = target_edge_id
-        self._initial_edge_id = None 
+        self._initial_edge_id = None # will hold the initial edge id of the ego vehicle used in goal checking
+        self.Control_Zone_edge_ID = Control_Zone_edge
         # --- Gym spaces  ---
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(21,), dtype=np.float32)  # 21 continuous features
         self.action_space = spaces.Discrete(6)                                      # 6 discrete actions
@@ -70,6 +72,7 @@ class SumoLaneChangeEnv(gym.Env):
     def reset(self, seed=None, options=None): #TODO REDO THIS 
         """Start (or restart) SUMO, choose an ego from the desired flow, and return the initial observation."""
         super().reset(seed=seed)                       # inform Gym we've reset
+        sumo_seed = self.np_random.integers(0, 10000) if seed is None else seed
 
         # if an old TraCI session is still open, close it
         try:
@@ -84,7 +87,8 @@ class SumoLaneChangeEnv(gym.Env):
         traci.start([                                   # launch SUMO with your config and step length
             sumo_binary,
             "-c", self.sumo_cfg_path,
-            "--step-length", str(self.step_length) #,
+            "--step-length", str(self.step_length) ,
+            "--seed", str(sumo_seed) #,
             #"--no-warnings", "true",
             #"--error-log", "NUL"  
         ])
@@ -136,7 +140,26 @@ class SumoLaneChangeEnv(gym.Env):
         #   longitudinal: 0=follow current-lane leader, 1=follow target-lane leader
         lat_cmd, lon_cmd = decode_action(action)
 
-        lat_cmd, rp = self._apply_safety_intervention(obs_t, lat_cmd)
+        rp = 0.0
+        edge_id = None
+        in_control_zone = True
+
+        try:
+            edge_id = traci.vehicle.getRoadID(self.ego_id)
+            if self.Control_Zone_edge_ID is not None:
+                in_control_zone = (edge_id == self.Control_Zone_edge_ID)
+        except Exception:
+            if self.Control_Zone_edge_ID is not None:
+                in_control_zone = False
+
+        if not in_control_zone:
+            lat_cmd = 0  # force keep-lane outside zone
+        else:
+            lat_cmd, rp = self._apply_safety_intervention(obs_t, lat_cmd)
+
+
+
+        #lat_cmd, rp = self._apply_safety_intervention(obs_t, lat_cmd)
 
         # longitudinal: compute a speed command from current obs + longitudinal intent
         v_cmd = self.longi_ctrl.compute(obs_t, lon_cmd)

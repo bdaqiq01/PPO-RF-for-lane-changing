@@ -36,6 +36,7 @@ IDM_S0 = 2.0         # m
 LANE_CHANGE_DURATION = 3  # seconds lane change duration
 LANE_CHANGE_DETECTION_DISTANCE = 10  # meters lane change detection distance 
 FLOW_ID = 'f_2'   #flow id to choose the ego vehicle from
+CONTROL_ZONE_EDGE = "E0.212"  #edge where the ego vehicle is controlled
 OFFRAMP_EDGE_ID = "E2"  #target edge
 
 
@@ -54,7 +55,8 @@ env = SumoLaneChangeEnv(
                         lateral_params=dict(
                             lane_change_duration=LANE_CHANGE_DURATION, 
                             lane_change_detection_distance=LANE_CHANGE_DETECTION_DISTANCE), 
-                        target_edge_id = OFFRAMP_EDGE_ID) 
+                        target_edge_id = OFFRAMP_EDGE_ID, 
+                        Control_Zone_edge=CONTROL_ZONE_EDGE) 
 
 # (Optional) small MLP that fits a 21-D state → policy/value
 policy_kwargs = dict(
@@ -80,7 +82,8 @@ eval_env = SumoLaneChangeEnv(
     lateral_params=dict(
         lane_change_duration=LANE_CHANGE_DURATION, 
         lane_change_detection_distance=LANE_CHANGE_DETECTION_DISTANCE), 
-    target_edge_id = OFFRAMP_EDGE_ID)
+    target_edge_id = OFFRAMP_EDGE_ID, 
+    Control_Zone_edge=CONTROL_ZONE_EDGE)
 
 model = PPO(
     "MlpPolicy",
