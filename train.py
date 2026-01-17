@@ -42,7 +42,7 @@ SPAWN_LANE_ID = "E0_0"  #lane in the spawn edge the ego vehicle spawns from
 START_LANE_ID = 1 #lane index the ego vehicle starts in the control zone 
 TARGET_LANE_ID = 0 #lane index the ego vehicle is supposed to change to in the control zone
 EXIT_EDGE_ID = "E2" #edge the ego vehicle is to take to after commiting to the lane change after the control zone 
-
+EXIT_LANE_ID = "E2" #lane in the exit edge the ego vehicle is to take to after commiting to the lane change after the control zone
 GATE_POS = 235.0
 
 

@@ -19,10 +19,6 @@ from utils.state_extraction import (
 )
 
 
-#gym has 4 core methods: __init__ (define the observation space action space any simuation setting or constance),
-# reset - called at the begining of an episode should restart, 
-# step - applies the agent chosen action to the world, advances the simulation by one step, and returns the new observation, calculates the reward, done
-#close cleans up the environment when done
 
 
 
@@ -65,7 +61,6 @@ class SumoLaneChangeEnv(gym.Env):
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(21,), dtype=np.float32)  # 21 continuous features
         self.action_space = spaces.Discrete(6)                                      # 6 discrete actions
         # --- low-level controllers ---
-        #I am not sure how these work yet
         if idm_params is None:
             idm_params = {}
         if lateral_params is None:
@@ -113,17 +108,43 @@ class SumoLaneChangeEnv(gym.Env):
             "--seed", str(sumo_seed) #,
         ])
 
-        # pick the ego vehicle from the specified flow
-        #option 1- of picking vehicle from a flow
-        self._choose_ego_from_flow(self.ego_flow_id, spawn_edge_id= self.control_zone_edge_ID, spawn_lane_idx= self.start_lane)  #need returns self.ego_id self.ego_id is defined in _choose_ego_from_flow()    
+        # Select ego from start_lane on control_zone_edge and disable automatic lane changing
+        self._choose_ego_from_flow(
+            self.ego_flow_id, 
+            spawn_edge_id=self.control_zone_edge_ID, 
+            spawn_lane_idx=self.start_lane
+        )
+        
         try:
             self._initial_lane_idx = traci.vehicle.getLaneIndex(self.ego_id)
             self._initial_edge_id = traci.vehicle.getRoadID(self.ego_id)
-        except Exception:
+            traci.vehicle.setLaneChangeMode(self.ego_id, 0)
+            traci.vehicle.setSpeedMode(self.ego_id, 0)
+            
+            # CRITICAL: Reject ego if not in start_lane - this prevents false success
+            if self._initial_lane_idx != self.start_lane:
+                print(f"[ERROR] Ego {self.ego_id} in lane {self._initial_lane_idx}, expected {self.start_lane}. Reselecting...")
+                # Try to find another vehicle
+                self._choose_ego_from_flow(
+                    self.ego_flow_id, 
+                    spawn_edge_id=self.control_zone_edge_ID, 
+                    spawn_lane_idx=self.start_lane
+                )
+                self._initial_lane_idx = traci.vehicle.getLaneIndex(self.ego_id)
+                self._initial_edge_id = traci.vehicle.getRoadID(self.ego_id)
+                traci.vehicle.setLaneChangeMode(self.ego_id, 0)
+                traci.vehicle.setSpeedMode(self.ego_id, 0)
+                
+            if self._initial_lane_idx == self.target_lane:
+                print(f"[CRITICAL ERROR] Ego spawned in target lane {self.target_lane}! This will cause false success!")
+                # Force failure by setting initial_lane_idx to None
+                self._initial_lane_idx = None
+        except Exception as e:
+            print(f"[ERROR] Failed to verify ego selection: {e}")
             self._initial_lane_idx = None
             self._initial_edge_id = None
         
-        obs = self._get_state() #this has to be produce the 21 dims that goes to PPO agent 
+        obs = self._get_state()
 
         info = {   
             "ego_id": self.ego_id,
@@ -142,21 +163,9 @@ class SumoLaneChangeEnv(gym.Env):
         (next_obs, reward, terminated, truncated, info)
         """
 
-        # --- (A) per-episode flags MUST exist (safe even if already set in reset) ---
-        if not hasattr(self, "_committed"):
-            self._committed = False
-        if not hasattr(self, "_took_exit"):
-            self._took_exit = False
-        if not hasattr(self, "_ppo_lane_change"):
-            self._ppo_lane_change = False
-        if not hasattr(self, "_pending_lc"):
-            self._pending_lc = False
-        if not hasattr(self, "_pending_lc_steps"):
-            self._pending_lc_steps = 0
-
         self._steps += 1
 
-        # --- (B) snapshot BEFORE action (guarded) ---
+        # --- (B) snapshot BEFORE action ---
         ego_exists = self.ego_id in traci.vehicle.getIDList()
         if not ego_exists:
             # Ego vanished before we even act -> terminate
@@ -173,35 +182,36 @@ class SumoLaneChangeEnv(gym.Env):
         except Exception:
             pass
 
-        # Decode discrete action -> (lat_cmd, lon_cmd)
         lat_cmd, lon_cmd = decode_action(int(action))
 
         # --- (C) control-zone gating + safety intervention ---
-        in_control_zone = (self.control_zone_edge_ID is None)
-        if self.control_zone_edge_ID is not None and prev_edge is not None:
-            in_control_zone = (prev_edge == self.control_zone_edge_ID)
+        in_control_zone = (self.control_zone_edge_ID is None or 
+                          (prev_edge is not None and prev_edge == self.control_zone_edge_ID))
 
         rp = 0.0
         if not in_control_zone:
-            lat_cmd = 0  # force keep-lane outside control zone
+            lat_cmd = 0
         else:
             lat_cmd, rp = self._apply_safety_intervention(obs_t, lat_cmd)
 
-        # --- (D) apply low-level controls + mark pending LC when PPO asks for LC in zone ---
-        # lateral controller issues TraCI lane-change command (if lat_cmd==1, etc.)
+        # --- (D) apply controls ---
+        if ego_exists:
+            try:
+                traci.vehicle.setLaneChangeMode(self.ego_id, 0)
+            except Exception:
+                pass
+        
         v_cmd = self.longi_ctrl.compute(obs_t, lon_cmd)
         self.lat_ctrl.execute(self.ego_id, lat_cmd)
         traci.vehicle.setSpeed(self.ego_id, float(v_cmd))
 
-        # PPO "attempted lane change" flag (pending until we see actual lane index change)
         if in_control_zone and lat_cmd == 1:
             self._pending_lc = True
             self._pending_lc_steps = 0
 
-        # --- (E) advance SUMO ---
         traci.simulationStep()
 
-        # --- (F) snapshot AFTER step (guarded) ---
+        # --- (F) snapshot AFTER step ---
         ego_exists = self.ego_id in traci.vehicle.getIDList()
         curr_edge = curr_lane_idx = curr_pos = None
         if ego_exists:
@@ -212,64 +222,44 @@ class SumoLaneChangeEnv(gym.Env):
             except Exception:
                 pass
 
-        # --- (G) PPO lane-change tracking using _pending_lc ---
-        # Mark success once we observe a real lane-index transition start_lane -> target_lane
+        # --- (G) detect lane change ---
+        # CRITICAL: Only detect lane change if we explicitly requested it (lat_cmd == 1)
         if self._pending_lc:
             self._pending_lc_steps += 1
 
-            # Confirm transition start_lane -> target_lane (best effort)
-            if (
-                prev_lane_idx is not None
-                and curr_lane_idx is not None
-                and prev_lane_idx == self.start_lane
-                and curr_lane_idx == self.target_lane
-            ):
+            # Only mark success if we see transition from start_lane -> target_lane
+            # AND we're still in the control zone
+            if (prev_lane_idx is not None and curr_lane_idx is not None and
+                prev_lane_idx == self.start_lane and curr_lane_idx == self.target_lane and
+                (self.control_zone_edge_ID is None or curr_edge == self.control_zone_edge_ID)):
                 self._ppo_lane_change = True
                 self._pending_lc = False
                 self._pending_lc_steps = 0
+                print(f"[DEBUG] Lane change detected: {prev_lane_idx} -> {curr_lane_idx}")
 
-            elif (
-                (curr_lane_idx is not None)
-                and (curr_lane_idx == self.target_lane)
-                and (self.control_zone_edge_ID is None or curr_edge == self.control_zone_edge_ID)
-            ):
-
-                self._ppo_lane_change = True
-                self._pending_lc = False
-                self._pending_lc_steps = 0
-
-            # Clear pending if it’s taking too long or ego left zone
-            if self._pending_lc and self._pending_lc_steps >= 6:
-                self._pending_lc = False
-                self._pending_lc_steps = 0
-
-            if (
-                self._pending_lc
-                and self.control_zone_edge_ID is not None
-                and curr_edge is not None
-                and curr_edge != self.control_zone_edge_ID
-            ):
+            # Clear if timeout or left control zone
+            if (self._pending_lc_steps >= 6 or 
+                (self.control_zone_edge_ID is not None and curr_edge is not None and 
+                 curr_edge != self.control_zone_edge_ID)):
                 self._pending_lc = False
                 self._pending_lc_steps = 0
 
     
 
-        # --- (H) commit route ONLY ONCE, and only if PPO already made it into target lane ---
-        # This prevents SUMO from "choosing back" before you commit.
-        if (
-            (not self._committed)
-            and ego_exists
-            and (self.control_zone_edge_ID is None or curr_edge == self.control_zone_edge_ID)
-            and (curr_pos is not None)
-            and (curr_pos >= self.gate_pos)
-        ):
+        # --- (H) commit route at gate (only if lane change occurred) ---
+        if (not self._committed and ego_exists and curr_pos is not None and 
+            curr_pos >= self.gate_pos and
+            (self.control_zone_edge_ID is None or curr_edge == self.control_zone_edge_ID)):
+            # CRITICAL: Only commit if PPO actually changed lanes
             if self._ppo_lane_change:
-                self._took_exit = bool(self._commit_route_at_gate())
+                self._took_exit = bool(self._commit_route_at_gate(self.exit_edge_id))
+                print(f"[DEBUG] Committing at gate: ppo_lc={self._ppo_lane_change}, took_exit={self._took_exit}, lane={curr_lane_idx}")
             else:
                 self._took_exit = False
+                print(f"[DEBUG] Reached gate but NO lane change: ppo_lc={self._ppo_lane_change}, lane={curr_lane_idx}")
             self._committed = True
 
-        # --- (I) next obs + reward ---
+        # --- (I) compute reward ---
         if ego_exists:
             try:
                 next_obs = self._get_state()
@@ -289,27 +279,24 @@ class SumoLaneChangeEnv(gym.Env):
             v_desired=25.0,
         )
 
-        # --- (J) termination ---
         terminated, truncated, reason, collision, success = self._check_done()
 
-        # --- (K) end-of-episode log ---
         if terminated or truncated:
             try:
                 edge_id = traci.vehicle.getRoadID(self.ego_id) if ego_exists else None
                 lane_idx = traci.vehicle.getLaneIndex(self.ego_id) if ego_exists else None
                 pos = traci.vehicle.getLanePosition(self.ego_id) if ego_exists else None
-                pos_str = f"{pos:.2f}" if pos is not None else "None"
+                initial_lane = getattr(self, '_initial_lane_idx', None)
+                print(f"[EP END] steps={self._steps}, reason={reason}, success={success}, "
+                      f"edge={edge_id}, lane={lane_idx}, initial_lane={initial_lane}, "
+                      f"ppo_lc={bool(self._ppo_lane_change)}, committed={bool(self._committed)}, "
+                      f"took_exit={bool(self._took_exit)}")
+                if success:
+                    print(f"[WARNING] SUCCESS DETECTED - verify all conditions were met!")
             except Exception:
-                edge_id, lane_idx, pos_str = None, None, "None"
+                pass
 
-            print(
-                f"[EP END] steps={self._steps}, reason={reason}, collision={collision}, success={success}, "
-                f"edge={edge_id}, lane={lane_idx}, pos={pos_str}, "
-                f"_pending_lc={bool(self._pending_lc)}, _ppo_lane_change={bool(self._ppo_lane_change)}, "
-                f"_committed={bool(self._committed)}, _took_exit={bool(self._took_exit)}"
-            )
-
-        # --- (L) info dict ---
+        # --- (J) info dict ---
         info = {
             "ego_id": self.ego_id,
             "step": self._steps,
@@ -355,7 +342,6 @@ class SumoLaneChangeEnv(gym.Env):
     # ------------------------- helpers -------------------------
 
     def _get_state(self):
-        """Wrapper so your existing utils/state_extraction.get_state() can start by only needing ego_id internally."""
         return get_state(self.ego_id)
 
     def _choose_ego_from_flow(
@@ -410,36 +396,17 @@ class SumoLaneChangeEnv(gym.Env):
 
 
     def _apply_safety_intervention(self, obs: np.ndarray, lat_cmd: int):
-        """
-        Safety intervention module (paper-style):
-
-        - Only intervenes when the agent wants to change lane (lat_cmd == 1).
-        - Uses distances to target-lane leader (C1) and follower (C3).
-        - If either is closer than detect_dist, treat as "catastrophic" and
-          override with an abort (lat_cmd = 2) and return a penalty Rp.
-        """
+        """Safety intervention: abort lane change if unsafe."""
         rp = 0.0
-
-        # If not trying to change lane, nothing to do
         if lat_cmd != 1:
             return lat_cmd, rp
 
-        # Distances in target lane:
-        Dy_c1 = float(obs[START_C1 + 0])  # Δy to target-lane leader
-        Dy_c3 = float(obs[START_C3 + 0])  # Δy to target-lane follower
-
-        # distance threshold ds (10 m by your macro)
+        Dy_c1 = float(obs[START_C1 + 0])
+        Dy_c3 = float(obs[START_C3 + 0])
         ds = getattr(self.lat_ctrl, "detect_dist", 10.0)
 
-        # Remember: Δy = y_i - y_e
-        unsafe_front = False
-        unsafe_back = False
-        
-        if abs(Dy_c1) < 900.0:  # Real vehicle exists
-            unsafe_front = 0.0 < Dy_c1 < ds
-        
-        if abs(Dy_c3) < 900.0:  # Real vehicle exists
-            unsafe_back = -ds < Dy_c3 < 0.0
+        unsafe_front = (abs(Dy_c1) < 900.0 and 0.0 < Dy_c1 < ds)
+        unsafe_back = (abs(Dy_c3) < 900.0 and -ds < Dy_c3 < 0.0)
         
         if unsafe_front or unsafe_back:
             lat_cmd = 2
@@ -449,6 +416,11 @@ class SumoLaneChangeEnv(gym.Env):
 
 
     def _check_done(self):
+        """
+        Check termination conditions according to paper:
+        - Success: ego changed lanes AND took exit (entered exit_edge_id)
+        - Failure: collision, timeout, or committed but didn't take exit
+        """
         terminated = False
         truncated = False
         collision = False
@@ -470,35 +442,45 @@ class SumoLaneChangeEnv(gym.Env):
         if ego_exists and (self.ego_id in colliding or self.ego_id in all_teleporting):
             return True, False, "collision_or_teleport", True, False
 
-        # --- 2) Ego removed from simulation (not found anymore) ---
+        # --- 2) Ego removed from simulation ---
         if not ego_exists:
             return True, False, "ego_removed", True, False
 
-        # --- 3) Ego still exists: check for goal ---
-        if self._reached_goal():
-            return True, False, "goal", False, True
+        # --- 3) Check if ego successfully took exit (entered exit_edge_id) ---
+        # According to paper: success = changed lanes AND took exit
+        if ego_exists and self.exit_edge_id:
+            try:
+                curr_edge = traci.vehicle.getRoadID(self.ego_id)
+                # Success: ego entered exit edge after successful lane change
+                if curr_edge == self.exit_edge_id and self._ppo_lane_change and self._took_exit:
+                    return True, False, "success_exit", False, True
+            except Exception:
+                pass
 
-        # committed but didn't take exit = failure
+        # --- 4) Committed but didn't take exit = failure ---
         if self._committed and (not self._took_exit):
             return True, False, "chose_mainline", False, False
 
+        # --- 5) Timeout ---
         if self._steps >= self._max_steps:
             truncated = True
             reason = "timeout"
+            # If timeout but ego changed lanes, it's partial success (but still failure)
+            # This encourages faster lane changes
 
         return terminated, truncated, reason, collision, success
 
     
     def _reached_goal(self):
-        return bool(self._committed and self._took_exit and self._ppo_lane_change)
+        """
+        DEPRECATED: Use _check_done() directly instead.
+        This method is kept for backward compatibility but success is now checked in _check_done().
+        """
+        return False  # Always return False - success is now checked in _check_done()
 
 
-    def _commit_route_at_gate(self) -> bool:
-        """
-        Commit decision at gate:
-        - "take exit" iff ego is in target_lane at/after gate on control zone edge
-        - If exit_edge_id is provided and we are taking exit: set a short route to force SUMO not to flip back.
-        """
+    def _commit_route_at_gate(self, exit_edge_id: str | None) -> bool:
+        """Route ego to exit_edge_id after successful lane change."""
         if self.ego_id not in traci.vehicle.getIDList():
             return False
 
@@ -509,23 +491,18 @@ class SumoLaneChangeEnv(gym.Env):
         except Exception:
             return False
 
-        # Must be on (or effectively at) control-zone edge when committing, if one is defined
-        if self.control_zone_edge_ID is not None and edge != self.control_zone_edge_ID:
-            return False
-
-        if pos is None or pos < self.gate_pos:
+        if (self.control_zone_edge_ID is not None and edge != self.control_zone_edge_ID) or pos is None or pos < self.gate_pos:
             return False
 
         took_exit = (lane == self.target_lane)
 
-        # If we decided exit, optionally force route to the exit edge
-        if took_exit and self.exit_edge_id:
-            # Include current edge so SUMO accepts the change
+        if took_exit and exit_edge_id:
             try:
-                traci.vehicle.setRoute(self.ego_id, [edge, self.exit_edge_id])
-            except Exception:
-                # If setRoute fails, still return decision based on lane
-                pass
+                traci.vehicle.setRoute(self.ego_id, [edge, exit_edge_id])
+                if exit_edge_id not in traci.vehicle.getRoute(self.ego_id):
+                    print(f"[WARNING] Failed to route to {exit_edge_id}")
+            except Exception as e:
+                print(f"[WARNING] Route error: {e}")
 
         return took_exit
 
