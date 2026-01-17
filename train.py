@@ -18,7 +18,7 @@ BATCH_SIZE = 64
 GAMMA = 0.99
 GAE_LAMBDA = 0.95
 CLIP_RANGE = 0.2
-ENT_COEF = 0.01
+ENT_COEF = 0.01  # entropy weight c2 in Eq. (2) which encourages exploration by keeping the policy's action distribution less peaked and more randon, preventing premature convergence to suboptimal policies
 VF_COEF = 0.5
 MAX_GRAD_NORM = 0.5
 TOTAL_TIMESTEPS = 200000 #500_000 #total timesteps to train the model
@@ -37,7 +37,13 @@ LANE_CHANGE_DURATION = 3  # seconds lane change duration
 LANE_CHANGE_DETECTION_DISTANCE = 10  # meters lane change detection distance 
 FLOW_ID = 'f_2'   #flow id to choose the ego vehicle from
 CONTROL_ZONE_EDGE = "E0.212"  #edge where the ego vehicle is controlled
-OFFRAMP_EDGE_ID = "E2"  #target edge
+SPAWN_EDGE_ID = "E0"  #edge the ego vehicle spawns from 
+SPAWN_LANE_ID = "E0_0"  #lane in the spawn edge the ego vehicle spawns from
+START_LANE_ID = 1 #lane index the ego vehicle starts in the control zone 
+TARGET_LANE_ID = 0 #lane index the ego vehicle is supposed to change to in the control zone
+EXIT_EDGE_ID = "E2" #edge the ego vehicle is to take to after commiting to the lane change after the control zone 
+
+GATE_POS = 235.0
 
 
 env = SumoLaneChangeEnv(
@@ -45,18 +51,22 @@ env = SumoLaneChangeEnv(
     step_length=STEP_LENGTH, 
     max_steps=max_episode_steps, 
     ego_flow_id=FLOW_ID, 
-                        #IDM parameters
-                        idm_params=dict(
-                            v0=IDM_V0, 
-                            T=IDM_T, a_max=IDM_A_MAX, 
-                            b_comf=IDM_B_COMF, 
-                            s0=IDM_S0), 
-                        #Lateral parameters
-                        lateral_params=dict(
-                            lane_change_duration=LANE_CHANGE_DURATION, 
-                            lane_change_detection_distance=LANE_CHANGE_DETECTION_DISTANCE), 
-                        target_edge_id = OFFRAMP_EDGE_ID, 
-                        Control_Zone_edge=CONTROL_ZONE_EDGE) 
+    gate_pos=GATE_POS,
+    control_zone_edge=CONTROL_ZONE_EDGE,
+    start_lane= START_LANE_ID,
+    target_lane = TARGET_LANE_ID ,
+    #IDM parameters
+    idm_params=dict(
+        v0=IDM_V0, 
+        T=IDM_T, a_max=IDM_A_MAX, 
+        b_comf=IDM_B_COMF, 
+        s0=IDM_S0), 
+    #Lateral parameters
+    lateral_params=dict(
+        lane_change_duration=LANE_CHANGE_DURATION, 
+        lane_change_detection_distance=LANE_CHANGE_DETECTION_DISTANCE), 
+    exit_edge_id=EXIT_EDGE_ID) 
+
 
 # (Optional) small MLP that fits a 21-D state → policy/value
 policy_kwargs = dict(
@@ -73,7 +83,11 @@ eval_env = SumoLaneChangeEnv(
     sumo_cfg_path="SUMO_sim/base2_compl/2lane_oneOnOff.sumocfg", 
     step_length=STEP_LENGTH, 
     max_steps=max_episode_steps, 
-    ego_flow_id=FLOW_ID, 
+    ego_flow_id=FLOW_ID,
+    gate_pos=GATE_POS,
+    control_zone_edge=CONTROL_ZONE_EDGE,
+    start_lane= START_LANE_ID,
+    target_lane = TARGET_LANE_ID,
     idm_params=dict(
         v0=IDM_V0, 
         T=IDM_T, a_max=IDM_A_MAX, 
@@ -82,8 +96,7 @@ eval_env = SumoLaneChangeEnv(
     lateral_params=dict(
         lane_change_duration=LANE_CHANGE_DURATION, 
         lane_change_detection_distance=LANE_CHANGE_DETECTION_DISTANCE), 
-    target_edge_id = OFFRAMP_EDGE_ID, 
-    Control_Zone_edge=CONTROL_ZONE_EDGE)
+    exit_edge_id=EXIT_EDGE_ID)
 
 model = PPO(
     "MlpPolicy",
