@@ -19,13 +19,13 @@ from utils.state_extraction import (
 
 @dataclass
 class RewardWeights:
-    # Comfort weights (Eq. 5)
-    alpha: float = 1.0   # weight on longitudinal jerk^2
-    beta: float = 1.0    # weight on lateral jerk^2
-    # Efficiency weights (Eq. 6)
-    wt: float = 1.0      # time
-    wl: float = 1.0      # lateral lane offset
-    ws: float = 1.0      # speed deviation
+    # Comfort weights (Eq. 5) - REDUCED to prevent reward instability
+    alpha: float = 0.1   # weight on longitudinal jerk^2 (reduced from 1.0)
+    beta: float = 0.1    # weight on lateral jerk^2 (reduced from 1.0)
+    # Efficiency weights (Eq. 6) - REDUCED to prevent reward instability
+    wt: float = 0.1      # time (reduced from 1.0)
+    wl: float = 0.1      # lateral lane offset (reduced from 1.0)
+    ws: float = 0.1      # speed deviation (reduced from 1.0 - this was the biggest penalty)
 
 
 def compute_reward(

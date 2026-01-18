@@ -111,6 +111,7 @@ model = PPO(
     vf_coef=VF_COEF,             # Eq. (2) value weight c1
     max_grad_norm=MAX_GRAD_NORM,
     policy_kwargs=policy_kwargs,
+    device="cpu",  # Use CPU for MLP (GPU is inefficient for MLP policies)
     verbose=1,
 )
 

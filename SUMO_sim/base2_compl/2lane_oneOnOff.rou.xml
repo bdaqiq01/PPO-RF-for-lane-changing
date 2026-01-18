@@ -5,7 +5,18 @@
 
 <routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/routes_file.xsd">
     <!-- Vehicles, persons and containers (sorted by depart) -->
-    <flow id="f_0" begin="0.00" departLane="random" departPos="random" departSpeed="random" from="E0" to="E0.497" via="E0.212" end="3600.00" vehsPerHour="300"/>
-    <flow id="f_2" begin="0.00" departLane="0" departPos="random" departSpeed="random" from="E0" to="E0.497" via="E0.212" end="3600.00" vehsPerHour="200"/>
-    <flow id="f_3" begin="0.00" departLane="random" departPos="random" departSpeed="random" from="E1" to="E0.497" via="E0.212" end="3600.00" vehsPerHour="200"/>
+    <!-- INCREASED TRAFFIC DENSITY for dense traffic scenario (paper requirement) -->
+    <!-- Original: 300+200+200=700 veh/hour total - too low for dense traffic -->
+    <!-- Increased to create challenging scenarios where agent must learn to find safe gaps -->
+    <!-- CRITICAL: f_target_lane ensures lane 0 (target lane) always has traffic -->
+    <flow id="f_0" begin="0.00" departLane="random" departPos="random" departSpeed="random" from="E0" to="E0.497" via="E0.212" end="3600.00" vehsPerHour="600"/>
+    <flow id="f_2" begin="0.00" departLane="0" departPos="random" departSpeed="random" from="E0" to="E0.497" via="E0.212" end="3600.00" vehsPerHour="500"/>
+    <!-- NEW: Dedicated flow for target lane (lane 0) to ensure it's never empty -->
+    <flow id="f_target_lane" begin="0.00" departLane="0" departPos="random" departSpeed="random" from="E0" to="E0.497" via="E0.212" end="3600.00" vehsPerHour="800"/>
+    <flow id="f_3" begin="0.00" departLane="random" departPos="random" departSpeed="random" from="E1" to="E0.497" via="E0.212" end="3600.00" vehsPerHour="400"/>
+    <!-- NEW: Flow from on-ramp (E1) through control zone (E0.212) to off-ramp (E2) -->
+    <!-- CRITICAL: Vehicles from E1 naturally enter E0.212 in lane 0 (target lane) -->
+    <!-- Network topology: E1 lane 0 -> E0.212 lane 0 (only route that enters lane 0) -->
+    <!-- E0 vehicles enter E0.212 in lanes 1-2, NOT lane 0, so we need E1 vehicles -->
+    <flow id="f_onramp_to_offramp" begin="0.00" departLane="0" departPos="random" departSpeed="random" from="E1" to="E2" via="E0.212" end="3600.00" vehsPerHour="1200"/>
 </routes>
