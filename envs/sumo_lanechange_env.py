@@ -106,11 +106,14 @@ class SumoLaneChangeEnv(gym.Env):
         #start a new TraCI session
         # choose binary: "sumo" for headless (fast), "sumo-gui" to watch
         sumo_binary = "sumo"                           # change to "sumo-gui" while debugging if you want
-        traci.start([                                   # launch SUMO with your config and step length
+        # Launch SUMO with your config and step length
+        # IMPORTANT: Disable per-step logging to avoid console spam and speed up training.
+        traci.start([
             sumo_binary,
             "-c", self.sumo_cfg_path,
-            "--step-length", str(self.step_length) ,
-            "--seed", str(sumo_seed) #,
+            "--step-length", str(self.step_length),
+            "--seed", str(sumo_seed),
+            "--no-step-log", "true",
         ])
         
         # CRITICAL: Advance simulation to let traffic build up before selecting ego
@@ -547,7 +550,10 @@ class SumoLaneChangeEnv(gym.Env):
                 ]
 
             if candidates:
-                self.ego_id = random.choice(candidates)
+                # Deterministic ego selection to reduce eval variance:
+                # always pick the first candidate in sorted order.
+                candidates = sorted(candidates)
+                self.ego_id = candidates[0]
                 traci.vehicle.setSpeedMode(self.ego_id, 0)
                 traci.vehicle.setLaneChangeMode(self.ego_id, 0)
                 return

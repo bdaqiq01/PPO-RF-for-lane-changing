@@ -3,14 +3,20 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback  # Add this import
 from torch import nn
-import gym
-import torch
 from envs.sumo_lanechange_env import SumoLaneChangeEnv
 import os
+from stable_baselines3.common.logger import configure
+from utils.callbacks import SuccessMetricsCallback
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.utils import set_random_seed
 
 
 # Define macros for hyperparameters
 STEP_LENGTH = 0.2 # 0.1 # step length in seconds for SUMO and environment step 0.1 is very slow so changed
+
+# Global seed for reproducibility (SUMO seed, numpy, torch, etc.)
+GLOBAL_SEED = 12345
+set_random_seed(GLOBAL_SEED)
 
 LEARNING_RATE = 1e-4
 N_STEPS = 512 #number of env steps PPO coellects before each update, it can be multiple episodes or one
@@ -67,6 +73,9 @@ env = SumoLaneChangeEnv(
         lane_change_detection_distance=LANE_CHANGE_DETECTION_DISTANCE), 
     exit_edge_id=EXIT_EDGE_ID) 
 
+# Wrap training env with Monitor so SB3 gets correct episode lengths/rewards
+env = Monitor(env)
+
 
 # (Optional) small MLP that fits a 21-D state → policy/value
 policy_kwargs = dict(
@@ -98,6 +107,22 @@ eval_env = SumoLaneChangeEnv(
         lane_change_detection_distance=LANE_CHANGE_DETECTION_DISTANCE), 
     exit_edge_id=EXIT_EDGE_ID)
 
+# Wrap eval env with Monitor (removes SB3 warning and ensures clean eval stats)
+eval_env = Monitor(eval_env)
+
+# Ensure eval env starts from a fixed seed for more repeatable evaluations
+eval_env.reset(seed=GLOBAL_SEED)
+
+
+log_dir = "./logs/run_001"
+os.makedirs(log_dir, exist_ok=True)
+
+logger = configure(
+    log_dir,
+    ["csv", "tensorboard"]  # no "stdout" → silent
+)
+
+
 model = PPO(
     "MlpPolicy",
     env,
@@ -112,18 +137,24 @@ model = PPO(
     max_grad_norm=MAX_GRAD_NORM,
     policy_kwargs=policy_kwargs,
     device="cpu",  # Use CPU for MLP (GPU is inefficient for MLP policies)
-    verbose=1,
+    verbose=0,
 )
+
+model.set_logger(logger)
 
 # Create callbacks
 eval_callback = EvalCallback(
     eval_env,
-    best_model_save_path='./logs/',
-    log_path='./logs/',
+    best_model_save_path=log_dir,
+    # IMPORTANT: Disable saving evaluations.npz to avoid NumPy shape errors
+    # with inhomogeneous result arrays when using newer NumPy/SB3 versions.
+    # We still save the best model weights via best_model_save_path.
+    log_path=None,
     eval_freq=10000,  # Evaluate every 10k steps
     deterministic=True,
     render=False,
-    n_eval_episodes=10  # Run 10 episodes for evaluation
+    n_eval_episodes=10,  # Run 10 episodes for evaluation
+    verbose=0,
 )
 
 checkpoint_callback = CheckpointCallback(
@@ -132,9 +163,15 @@ checkpoint_callback = CheckpointCallback(
     name_prefix='ppo_sumo'
 )
 
+metrics_callback = SuccessMetricsCallback(
+    window_size=100,
+    log_every_steps=2000
+)
+
+
 # Update model.learn() to include callbacks
 model.learn(
     total_timesteps=TOTAL_TIMESTEPS,
-    callback=[eval_callback, checkpoint_callback]  # Add callbacks here
+    callback=[eval_callback, checkpoint_callback, metrics_callback]  # Add callbacks here
 )
 model.save(MODEL_NAME)
