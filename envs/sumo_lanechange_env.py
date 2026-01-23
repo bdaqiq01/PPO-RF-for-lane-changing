@@ -102,18 +102,27 @@ class SumoLaneChangeEnv(gym.Env):
         self._last_pos_in_zone = 0.0  # Track position in control zone for progress reward
         self._entered_control_zone = False  # Track if agent entered control zone this episode
         self._steps_in_control_zone = 0  # Track steps in control zone without lane change (for delay penalty)
+        # Collision tracking for debugging
+        self._collisions_total = 0
+        self._collisions_ego_involved = 0
 
         #start a new TraCI session
         # choose binary: "sumo" for headless (fast), "sumo-gui" to watch
         sumo_binary = "sumo"                           # change to "sumo-gui" while debugging if you want
         # Launch SUMO with your config and step length
-        # IMPORTANT: Disable per-step logging to avoid console spam and speed up training.
+        # CRITICAL: Disable teleporting to prevent SUMO from hiding collisions
+        # --time-to-teleport -1: Disables automatic teleporting (vehicles will be removed on collision instead)
+        # --collision.action remove: Removes vehicles on collision (cleaner than teleporting)
+        # --no-step-log: Disable per-step logging to avoid console spam
+        # Note: SUMO warnings will still appear in console, but collisions will now properly terminate episodes
         traci.start([
             sumo_binary,
             "-c", self.sumo_cfg_path,
             "--step-length", str(self.step_length),
             "--seed", str(sumo_seed),
             "--no-step-log", "true",
+            "--time-to-teleport", "-1",  # Disable teleporting (vehicles removed on collision)
+            "--collision.action", "remove",  # Remove vehicles on collision instead of teleporting
         ])
         
         # CRITICAL: Advance simulation to let traffic build up before selecting ego
@@ -475,6 +484,9 @@ class SumoLaneChangeEnv(gym.Env):
             "_ppo_lane_change": bool(self._ppo_lane_change),
             "_committed": bool(self._committed),
             "_took_exit": bool(self._took_exit),
+            # Collision tracking statistics
+            "collisions_total": self._collisions_total,
+            "collisions_ego_involved": self._collisions_ego_involved,
         }
         info.update(reward_components)
 
@@ -606,11 +618,19 @@ class SumoLaneChangeEnv(gym.Env):
 
         # --- 1) Check collisions & teleports first (CRITICAL: must prevent success) ---
         has_collision_or_teleport = False
+        ego_involved = False
         try:
             colliding = set(traci.simulation.getCollidingVehiclesIDList())
             starting_teleports = set(traci.simulation.getStartingTeleportIDList())
             teleporting = set(traci.simulation.getTeleportingVehiclesIDList())
             all_teleporting = starting_teleports | teleporting
+            
+            # Track collision statistics
+            if colliding:
+                self._collisions_total += len(colliding)
+                if self.ego_id in colliding:
+                    self._collisions_ego_involved += 1
+                    ego_involved = True
             
             # Check if ego collided or teleported
             has_collision_or_teleport = (self.ego_id in colliding or self.ego_id in all_teleporting)
@@ -620,7 +640,10 @@ class SumoLaneChangeEnv(gym.Env):
 
         # CRITICAL: If collision/teleport occurred, ALWAYS return failure (success=False)
         if has_collision_or_teleport:
-            return True, False, "collision_or_teleport", True, False
+            reason_str = "collision_or_teleport"
+            if ego_involved:
+                reason_str += "_ego_involved"
+            return True, False, reason_str, True, False
 
         # --- 2) Ego removed from simulation ---
         if not ego_exists:
