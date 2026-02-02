@@ -115,15 +115,26 @@ class SumoLaneChangeEnv(gym.Env):
         # --collision.action remove: Removes vehicles on collision (cleaner than teleporting)
         # --no-step-log: Disable per-step logging to avoid console spam
         # Note: SUMO warnings will still appear in console, but collisions will now properly terminate episodes
-        traci.start([
-            sumo_binary,
-            "-c", self.sumo_cfg_path,
-            "--step-length", str(self.step_length),
-            "--seed", str(sumo_seed),
-            "--no-step-log", "true",
-            "--time-to-teleport", "-1",  # Disable teleporting (vehicles removed on collision)
-            "--collision.action", "remove",  # Remove vehicles on collision instead of teleporting
-        ])
+        try:
+            traci.start([
+                sumo_binary,
+                "-c", self.sumo_cfg_path,
+                "--step-length", str(self.step_length),
+                "--seed", str(sumo_seed),
+                "--no-step-log", "true",
+                "--time-to-teleport", "-1",  # Disable teleporting (vehicles removed on collision)
+                "--collision.action", "remove",  # Remove vehicles on collision instead of teleporting
+            ], numRetries=3)  # Limit retries to avoid infinite loop
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to start SUMO with config: {self.sumo_cfg_path}\n"
+                f"Error: {e}\n"
+                f"Please check:\n"
+                f"  1. SUMO is installed and in PATH\n"
+                f"  2. Config file exists and is valid\n"
+                f"  3. All referenced files (net.xml, rou.xml) exist\n"
+                f"  4. No other SUMO instance is running on the same port"
+            ) from e
         
         # CRITICAL: Advance simulation to let traffic build up before selecting ego
         # This ensures vehicles from E1 (on-ramp) arrive in lane 0 before ego needs them
