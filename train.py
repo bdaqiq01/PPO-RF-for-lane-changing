@@ -117,10 +117,19 @@ eval_env.reset(seed=GLOBAL_SEED)
 log_dir = "./logs/run_001"
 os.makedirs(log_dir, exist_ok=True)
 
-logger = configure(
-    log_dir,
-    ["csv", "tensorboard"]  # no "stdout" → silent
-)
+# Try to use TensorBoard if available, otherwise fall back to CSV only
+try:
+    import tensorboard
+    logger = configure(
+        log_dir,
+        ["csv", "tensorboard"]  # CSV for data analysis, TensorBoard for visualization
+    )
+except ImportError:
+    print("⚠️  TensorBoard not installed. Using CSV logging only. Install with: pip install tensorboard")
+    logger = configure(
+        log_dir,
+        ["csv"]  # CSV logging only (works without TensorBoard)
+    )
 
 
 model = PPO(

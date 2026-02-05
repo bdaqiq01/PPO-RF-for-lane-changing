@@ -10,4 +10,14 @@
         <route-files value="2lane_oneOnOff.rou.xml"/>
     </input>
 
+    <processing>
+        <!-- Disable teleporting: vehicles will be removed on collision instead of teleporting -->
+        <time-to-teleport value="-1"/>
+    </processing>
+
+    <report>
+        <!-- Disable per-step logging to reduce console spam -->
+        <no-step-log value="true"/>
+    </report>
+
 </sumoConfiguration>
