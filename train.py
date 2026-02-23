@@ -71,6 +71,7 @@ env = SumoLaneChangeEnv(
     exit_edge_id=EXIT_EDGE_ID) 
 
 # Wrap training env with Monitor so SB3 gets correct episode lengths/rewards
+print("training env initialized")
 env = Monitor(env)
 
 
@@ -102,6 +103,7 @@ eval_env = SumoLaneChangeEnv(
         lane_change_duration=LANE_CHANGE_DURATION, 
         lane_change_detection_distance=LANE_CHANGE_DETECTION_DISTANCE), 
     exit_edge_id=EXIT_EDGE_ID)
+print("eval env initialized")
 
 # Wrap eval env with Monitor (removes SB3 warning and ensures clean eval stats)
 eval_env = Monitor(eval_env)

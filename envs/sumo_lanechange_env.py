@@ -52,8 +52,6 @@ class SumoLaneChangeEnv(gym.Env):
 
         self._steps = 0
 
-    
-
         self.debug_mode = debug_mode
 
     def reset(self, seed=None, options=None):
@@ -64,7 +62,7 @@ class SumoLaneChangeEnv(gym.Env):
             sumo_seed = int(self.np_random.integers(0, 2**31 - 1))
         else:
             sumo_seed = int(seed)
-
+        print("this reset before traci open")
         #2.  if an old TraCI session is still open, close it
         try:
             if traci.isLoaded():
@@ -129,7 +127,6 @@ class SumoLaneChangeEnv(gym.Env):
         Apply an RL action, advance SUMO one step, and return:
         (next_obs, reward, terminated, truncated, info)
         """
-
         self._steps += 1 
 
         # --- check if ego exists ---
@@ -157,6 +154,7 @@ class SumoLaneChangeEnv(gym.Env):
 
     def close(self):
         """Close the TraCI connection cleanly and call the parent close()."""
+        print("this close function is called")
         try:
             if traci.isLoaded():
                 traci.close()
@@ -173,6 +171,7 @@ class SumoLaneChangeEnv(gym.Env):
     # ------------------------- helpers -------------------------
 
     def _get_state(self):
+
         return get_state(self.ego_id)
 
     def _choose_ego_from_flow(
