@@ -1,0 +1,17 @@
+# Python virtual environment
+python_env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# SB3 / training outputs
+logs/
+checkpoints/
+*.zip
+
+# Model saves
+ppo_sumo_lanechange*
+
+# OS
+.DS_Store

@@ -1,12 +1,10 @@
 # train.py
 from stable_baselines3 import PPO
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback  # Add this import
 from torch import nn
 from envs.sumo_lanechange_env import SumoLaneChangeEnv
 import os
 from stable_baselines3.common.logger import configure
-from utils.callbacks import SuccessMetricsCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
 
@@ -27,7 +25,7 @@ CLIP_RANGE = 0.2
 ENT_COEF = 0.01  # entropy weight c2 in Eq. (2) which encourages exploration by keeping the policy's action distribution less peaked and more randon, preventing premature convergence to suboptimal policies
 VF_COEF = 0.5
 MAX_GRAD_NORM = 0.5
-TOTAL_TIMESTEPS = 200000 #500_000 #total timesteps to train the model
+TOTAL_TIMESTEPS = 20000 #500_000 #total timesteps to train the model
 MODEL_NAME = "ppo_sumo_lanechange"
 max_episode_steps = 256 #int(60 / STEP_LENGTH) * 2  # experimenting with 2 episode per update
 
@@ -57,7 +55,6 @@ env = SumoLaneChangeEnv(
     step_length=STEP_LENGTH, 
     max_steps=max_episode_steps, 
     ego_flow_id=FLOW_ID, 
-    gate_pos=GATE_POS,
     control_zone_edge=CONTROL_ZONE_EDGE,
     start_lane= START_LANE_ID,
     target_lane = TARGET_LANE_ID ,
@@ -93,7 +90,6 @@ eval_env = SumoLaneChangeEnv(
     step_length=STEP_LENGTH, 
     max_steps=max_episode_steps, 
     ego_flow_id=FLOW_ID,
-    gate_pos=GATE_POS,
     control_zone_edge=CONTROL_ZONE_EDGE,
     start_lane= START_LANE_ID,
     target_lane = TARGET_LANE_ID,
@@ -172,15 +168,11 @@ checkpoint_callback = CheckpointCallback(
     name_prefix='ppo_sumo'
 )
 
-metrics_callback = SuccessMetricsCallback(
-    window_size=100,
-    log_every_steps=2000
-)
 
 
 # Update model.learn() to include callbacks
 model.learn(
     total_timesteps=TOTAL_TIMESTEPS,
-    callback=[eval_callback, checkpoint_callback, metrics_callback]  # Add callbacks here
+    callback=[eval_callback, checkpoint_callback]  # Add callbacks here
 )
 model.save(MODEL_NAME)
