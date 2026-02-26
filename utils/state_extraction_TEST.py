@@ -20,11 +20,11 @@ SUMO_CONFIG = [
 
 # ----------------- STATE INDEXING -----------------
 # ego: (Py, Vy, Ay, Px, Vx)
-IDX_PY_EGO = 0  #longitudinal position
-IDX_VY_EGO = 1 #longitudinal speed
-IDX_AY_EGO = 2 #longitudinal acceleration
-IDX_PX_EGO = 3 #lateral position
-IDX_VX_EGO = 4
+IDX_PX_EGO = 0  #forward position
+IDX_VX_EGO = 1 #forward  speed
+IDX_AX_EGO = 2 #forward acceleration
+IDX_PY_EGO = 3 #lateral position lane coordinates
+IDX_VY_EGO = 4 #lateral speed
 
 # C0..C3 blocks of 4 for each neighbor ( relative distance, speed, acceleration, lateral position)
 START_C0 = 5   # current-lane leader
@@ -136,25 +136,26 @@ def get_state_21d(ego_id: str) -> np.ndarray:
     obs = np.zeros(21, dtype=np.float32)
 
     # --------- EGO FEATURES (5) ---------
-    x_e, y_e = traci.vehicle.getPosition(ego_id)     # Py_e = y_e
-    Vy_e = traci.vehicle.getSpeed(ego_id)            # longitudinal speed
-    Ay_e = traci.vehicle.getAcceleration(ego_id)     # longitudinal accel
+    x_e, y_e = traci.vehicle.getPosition(ego_id)     # Py_e = y_e 
+
+    Vx_e = traci.vehicle.getSpeed(ego_id)            # forward speed
+    Ax_e = traci.vehicle.getAcceleration(ego_id)     # forward acceleration
 
     try:
-        Px_e = traci.vehicle.getLateralLanePosition(ego_id)  # lateral position
+        Py_e = traci.vehicle.getLateralLanePosition(ego_id)  # lateral position lane coordinates
     except traci.TraCIException:
-        Px_e = x_e  # fallback
+        Py_e = y_e  # fallback
 
     try:
-        Vx_e = traci.vehicle.getLateralSpeed(ego_id)         # lateral speed
+        Vy_e = traci.vehicle.getLateralSpeed(ego_id)         # size to side speed
     except (AttributeError, traci.TraCIException):
-        Vx_e = 0.0
+        Vy_e = 0.0
 
-    obs[IDX_PY_EGO] = y_e
-    obs[IDX_VY_EGO] = Vy_e
-    obs[IDX_AY_EGO] = Ay_e
-    obs[IDX_PX_EGO] = Px_e
+    obs[IDX_PX_EGO] = x_e
     obs[IDX_VX_EGO] = Vx_e
+    obs[IDX_AX_EGO] = Ax_e
+    obs[IDX_PY_EGO] = Py_e #Lane coordinates 
+    obs[IDX_VY_EGO] = Vy_e  #side to side speed
 
     # --------- SURROUNDING VEHICLES (4 x 4) ---------
     curr_lane_id = traci.vehicle.getLaneID(ego_id)

@@ -8,9 +8,9 @@ from stable_baselines3.common.logger import configure
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
 
-
+#layer 0 of training 
 # Define macros for hyperparameters
-STEP_LENGTH = 0.2 # 0.1 # step length in seconds for SUMO and environment step 0.1 is very slow so changed
+STEP_LENGTH = 0.2 # 0.1 # step length in seconds for SUMO and environment 
 
 # Global seed for reproducibility (SUMO seed, numpy, torch, etc.)
 GLOBAL_SEED = 12345
@@ -56,6 +56,7 @@ env = SumoLaneChangeEnv(
     max_steps=max_episode_steps, 
     ego_flow_id=FLOW_ID, 
     control_zone_edge=CONTROL_ZONE_EDGE,
+    debug_mode=True,
     start_lane= START_LANE_ID,
     target_lane = TARGET_LANE_ID ,
     #IDM parameters

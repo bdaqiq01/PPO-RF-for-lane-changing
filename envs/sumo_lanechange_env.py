@@ -11,7 +11,7 @@ from controllers.longitudinal_idm import IDMController   # low-level longitudina
 from controllers.lateral_controller import LateralController  # low-level lateral controller
 from utils.state_extraction import get_state             # builds the 21-d observation
 
-
+#layer 0 of training implementation
 
 class SumoLaneChangeEnv(gym.Env):
     """
@@ -62,7 +62,8 @@ class SumoLaneChangeEnv(gym.Env):
             sumo_seed = int(self.np_random.integers(0, 2**31 - 1))
         else:
             sumo_seed = int(seed)
-        print("this reset before traci open")
+        if self.debug_mode:
+            print("[RESET] before traci.start()")
         #2.  if an old TraCI session is still open, close it
         try:
             if traci.isLoaded():
@@ -96,6 +97,8 @@ class SumoLaneChangeEnv(gym.Env):
                 f"  4. No other SUMO instance is running on the same port"
             ) from e
         
+        if self.debug_mode:
+            print("[RESET] traci.start() succeeded")
         for _ in range(warmup_steps):
             traci.simulationStep()
         
@@ -106,8 +109,9 @@ class SumoLaneChangeEnv(gym.Env):
             spawn_edge_id=self.control_zone_edge_ID, 
             spawn_lane_idx=self.start_lane
         )
+        if self.debug_mode:
+            print(f"[RESET] ego_id found: {self.ego_id}")
 
-        
         info = {
             "ego_id": self.ego_id,
             "step": self._steps
@@ -117,7 +121,7 @@ class SumoLaneChangeEnv(gym.Env):
         if self.debug_mode:
             print(f"[RESET] Chosen ego_id={self.ego_id} from flow='{self.ego_flow_id}'")
             print(f"[RESET] Observation shape: {obs.shape}")
-            print(f"[RESET] Observation: {obs}")
+            print(f"[RESET] Initial obs[:5]={obs[:5]}")
         assert obs.shape == self.observation_space.shape
 
         return obs, info
@@ -131,6 +135,8 @@ class SumoLaneChangeEnv(gym.Env):
 
         # --- check if ego exists ---
         ego_exists = self.ego_id in traci.vehicle.getIDList()
+        if self.debug_mode:
+            print(f"[STEP {self._steps}] ego_exists={ego_exists}")
         if not ego_exists:
             # Ego vanished before we even act -> terminate
             obs = np.zeros(self.observation_space.shape, dtype=np.float32)
@@ -141,6 +147,8 @@ class SumoLaneChangeEnv(gym.Env):
         
         traci.simulationStep()
         obs = self._get_state().astype(np.float32)
+        if self.debug_mode:
+            print(f"[STEP {self._steps}] obs[:5]={obs[:5]}")
 
         info = {
             "ego_id": self.ego_id,
@@ -154,7 +162,8 @@ class SumoLaneChangeEnv(gym.Env):
 
     def close(self):
         """Close the TraCI connection cleanly and call the parent close()."""
-        print("this close function is called")
+        if self.debug_mode:
+            print("[CLOSE] closing TraCI connection")
         try:
             if traci.isLoaded():
                 traci.close()
