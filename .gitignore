@@ -13,5 +13,11 @@ checkpoints/
 # Model saves
 ppo_sumo_lanechange*
 
+# Test / debug scripts (not part of the trained model)
+test_layer*.py
+minimal_check_script.py
+check_env.py
+testing.py
+
 # OS
 .DS_Store

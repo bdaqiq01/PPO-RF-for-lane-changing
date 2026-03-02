@@ -26,7 +26,8 @@ class SumoLaneChangeEnv(gym.Env):
                  max_steps,  #max steps per episode
                  ego_flow_id, #flow id to choose ego from 
                  control_zone_edge, #edge where the ego vehicle is controlled
-                 debug_mode: bool = False, 
+                 debug_mode: bool = False,
+                 use_gui: bool = False,  # launch sumo-gui instead of sumo (for debugging)
                  start_lane: int = 1,  #ego car lane in the control zone
                  target_lane: int = 0,  #target lane in the control zone (offramp lane)
                  idm_params = None,
@@ -53,6 +54,7 @@ class SumoLaneChangeEnv(gym.Env):
         self._steps = 0
 
         self.debug_mode = debug_mode
+        self.use_gui = use_gui
 
     def reset(self, seed=None, options=None):
         #1. gym seed handling
@@ -73,9 +75,9 @@ class SumoLaneChangeEnv(gym.Env):
         #3. reset the episode-level variables
         self._steps = 0
 
-        warmup_steps = 20 
+        warmup_steps = 40  # enough for multiple flow vehicles to reach the control zone edge
         #4. start a new TraCI session
-        sumo_binary = "sumo"                           # change to "sumo-gui" while debugging if you want
+        sumo_binary = "sumo-gui" if self.use_gui else "sumo"
         try:   
             traci.start([
                 sumo_binary,
@@ -120,8 +122,8 @@ class SumoLaneChangeEnv(gym.Env):
         obs = self._get_state().astype(np.float32)
         if self.debug_mode:
             print(f"[RESET] Chosen ego_id={self.ego_id} from flow='{self.ego_flow_id}'")
-            print(f"[RESET] Observation shape: {obs.shape}")
-            print(f"[RESET] Initial obs[:5]={obs[:5]}")
+            #print(f"[RESET] Observation shape: {obs.shape}")
+            print(f"[RESET] Initial obs[5:]={obs[5:]}")
         assert obs.shape == self.observation_space.shape
 
         return obs, info
@@ -141,23 +143,23 @@ class SumoLaneChangeEnv(gym.Env):
             # Ego vanished before we even act -> terminate
             obs = np.zeros(self.observation_space.shape, dtype=np.float32)
             info = {"ego_id": self.ego_id, "step": self._steps, "reason": "ego_missing_pre"}
-            return obs, 0.0, True, False, info #current observation, reward, terminated, truncated, info
-        
-        
-        
+            return obs, 0.0, True, False, info
+
         traci.simulationStep()
         obs = self._get_state().astype(np.float32)
         if self.debug_mode:
-            print(f"[STEP {self._steps}] obs[:5]={obs[:5]}")
+            print(f"[STEP {self._steps}] obs[5:]={obs[5:]}")
 
         info = {
             "ego_id": self.ego_id,
             "step": self._steps
-        }   
+        }
 
-        terminated = self._steps >= self._max_steps
-        truncated = False
-        return obs, 0.0, terminated, truncated, info #current observation, reward, terminated, truncated, info
+        # Layer 0: no terminal conditions yet — only the time-limit truncation.
+        # Gymnasium convention: truncated=True for step-limit, terminated=True for real endings.
+        terminated = False
+        truncated = self._steps >= self._max_steps
+        return obs, 0.0, terminated, truncated, info
 
 
     def close(self):
@@ -223,10 +225,17 @@ class SumoLaneChangeEnv(gym.Env):
                 ]
 
             if candidates:
-                # Deterministic ego selection to reduce eval variance:
-                # always pick the first candidate in sorted order.
-                candidates = sorted(candidates)
-                self.ego_id = candidates[0]
+                #deterministic ego selection
+                #candidates = sorted(candidates)
+                #self.ego_id = candidates[0]
+                #random ego selection
+                # Pick a random candidate so the ego is not always the
+                # frontrunner vehicle (lowest ID = spawned first = furthest
+                # along the edge = no traffic ahead). Using np_random keeps
+                # the selection deterministic when a fixed seed is passed to
+                # reset(), which is important for the eval env.
+                idx = int(self.np_random.integers(0, len(candidates)))
+                self.ego_id = candidates[idx]
                 traci.vehicle.setSpeedMode(self.ego_id, 0)
                 traci.vehicle.setLaneChangeMode(self.ego_id, 0)
                 return
