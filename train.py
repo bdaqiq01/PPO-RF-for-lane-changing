@@ -57,6 +57,7 @@ env = SumoLaneChangeEnv(
     ego_flow_id=FLOW_ID, 
     control_zone_edge=CONTROL_ZONE_EDGE,
     debug_mode=True,
+    use_gui=False,   # TEMPORARY – revert before training
     start_lane= START_LANE_ID,
     target_lane = TARGET_LANE_ID ,
     #IDM parameters
@@ -108,9 +109,6 @@ print("eval env initialized")
 
 # Wrap eval env with Monitor (removes SB3 warning and ensures clean eval stats)
 eval_env = Monitor(eval_env)
-
-# Ensure eval env starts from a fixed seed for more repeatable evaluations
-eval_env.reset(seed=GLOBAL_SEED)
 
 
 log_dir = "./logs/run_001"

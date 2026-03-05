@@ -55,6 +55,12 @@ class SumoLaneChangeEnv(gym.Env):
 
         self.debug_mode = debug_mode
         self.use_gui = use_gui
+        # Unique TraCI connection label for this env instance so that multiple
+        # simultaneous envs (e.g. training + eval) never share the same SUMO
+        # process.  traci.switch(label) is called at the top of every method
+        # that uses TraCI, redirecting all global traci.xxx calls to the right
+        # connection without requiring changes to state_extraction.py.
+        self._traci_label = f"sumo_{id(self)}"
 
     def reset(self, seed=None, options=None):
         #1. gym seed handling
@@ -66,12 +72,13 @@ class SumoLaneChangeEnv(gym.Env):
             sumo_seed = int(seed)
         if self.debug_mode:
             print("[RESET] before traci.start()")
-        #2.  if an old TraCI session is still open, close it
+        #2.  if THIS env's TraCI session is still open from a previous episode, close it
         try:
-            if traci.isLoaded():
-                traci.close()
-        except Exception:
-            pass
+            traci.getConnection(self._traci_label).close()
+            if self.debug_mode:
+                print("[RESET] closing old TraCI session")
+        except traci.TraCIException:
+            pass  # no prior session for this label
         #3. reset the episode-level variables
         self._steps = 0
 
@@ -87,7 +94,8 @@ class SumoLaneChangeEnv(gym.Env):
                 "--no-step-log", "true",
                 "--time-to-teleport", "-1",  # Disable teleporting (vehicles removed on collision)
                 "--collision.action", "remove",  # Remove vehicles on collision instead of teleporting
-            ], numRetries=3)  # Limit retries to avoid infinite loop
+            ], label=self._traci_label, numRetries=3)
+            traci.switch(self._traci_label)  # route all global traci.xxx calls to this env
         except Exception as e:
             raise RuntimeError(
                 f"Failed to start SUMO with config: {self.sumo_cfg_path}\n"
@@ -133,6 +141,7 @@ class SumoLaneChangeEnv(gym.Env):
         Apply an RL action, advance SUMO one step, and return:
         (next_obs, reward, terminated, truncated, info)
         """
+        traci.switch(self._traci_label)  # ensure global traci points to this env's connection
         self._steps += 1 
 
         # --- check if ego exists ---
@@ -140,9 +149,22 @@ class SumoLaneChangeEnv(gym.Env):
         if self.debug_mode:
             print(f"[STEP {self._steps}] ego_exists={ego_exists}")
         if not ego_exists:
-            # Ego vanished before we even act -> terminate
+            # Ego vanished before we even act -> determine why and terminate
+            try:
+                arrived   = set(traci.simulation.getArrivedIDList())
+                colliding = set(traci.simulation.getCollidingVehiclesIDList())
+            except Exception:
+                arrived, colliding = set(), set()
+            if self.ego_id in arrived:
+                reason = "ego_arrived"        # completed its route normally
+            elif self.ego_id in colliding:
+                reason = "ego_collision"      # removed due to collision
+            else:
+                reason = "ego_missing_pre"    # unknown (teleport, net boundary, etc.)
+            if self.debug_mode:
+                print(f"[STEP {self._steps}] ego gone — reason={reason}")
             obs = np.zeros(self.observation_space.shape, dtype=np.float32)
-            info = {"ego_id": self.ego_id, "step": self._steps, "reason": "ego_missing_pre"}
+            info = {"ego_id": self.ego_id, "step": self._steps, "reason": reason}
             return obs, 0.0, True, False, info
 
         traci.simulationStep()
@@ -167,10 +189,9 @@ class SumoLaneChangeEnv(gym.Env):
         if self.debug_mode:
             print("[CLOSE] closing TraCI connection")
         try:
-            if traci.isLoaded():
-                traci.close()
-        except Exception:
-            pass
+            traci.getConnection(self._traci_label).close()
+        except traci.TraCIException:
+            pass  # already closed or never opened
 
         # Call Gym's built-in close (important for some wrappers)
         try:
@@ -236,8 +257,8 @@ class SumoLaneChangeEnv(gym.Env):
                 # reset(), which is important for the eval env.
                 idx = int(self.np_random.integers(0, len(candidates)))
                 self.ego_id = candidates[idx]
-                traci.vehicle.setSpeedMode(self.ego_id, 0)
-                traci.vehicle.setLaneChangeMode(self.ego_id, 0)
+                #traci.vehicle.setSpeedMode(self.ego_id, 0) #disables for layer 0 
+                #traci.vehicle.setLaneChangeMode(self.ego_id, 0)
                 return
 
         raise RuntimeError(
