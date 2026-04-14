@@ -3,9 +3,9 @@
 import numpy as np
 
 from utils.state_extraction import (
-    IDX_VY_EGO,
-    START_C0,
-    START_C1,
+    IDX_VX_EGO, # index of the ego vehicle's forward speed in the observation
+    START_C0, # index of the current-lane leader in the observation
+    START_C1, # index of the target-lane leader in the observation
 )
 
 
@@ -40,7 +40,8 @@ class IDMController:
         lon_cmd: 0 = follow current-lane leader (C0)
                  1 = follow target-lane leader (C1)
         """
-        v_ego = float(obs[IDX_VY_EGO])
+        # Ego forward speed (X axis), not lateral speed.
+        v_ego = float(obs[IDX_VX_EGO])
 
         # --- pick which leader block to use ---
         if lon_cmd == 0:

@@ -16,6 +16,56 @@ START_C1 = 9   # target-lane leader
 START_C2 = 13  # current-lane follower
 START_C3 = 17  # target-lane follower
 
+# ----------------- LOCKED 21-D SCHEMA -----------------
+# Keep this map as the single source of truth for observation indices.
+# The environment and any reward/safety logic should reference this layout.
+OBS21_SCHEMA = {
+    # Ego block (5)
+    "ego.px": 0,  # forward position (X)
+    "ego.vx": 1,  # forward speed
+    "ego.ax": 2,  # forward acceleration
+    "ego.py": 3,  # lateral position (Y/lane coordinates)
+    "ego.vy": 4,  # lateral speed
+    # Current-lane leader C0 (4)
+    "c0.dx": 5,
+    "c0.vx": 6,
+    "c0.ax": 7,
+    "c0.py": 8,
+    # Target-lane leader C1 (4)
+    "c1.dx": 9,
+    "c1.vx": 10,
+    "c1.ax": 11,
+    "c1.py": 12,
+    # Current-lane follower C2 (4)
+    "c2.dx": 13,
+    "c2.vx": 14,
+    "c2.ax": 15,
+    "c2.py": 16,
+    # Target-lane follower C3 (4)
+    "c3.dx": 17,
+    "c3.vx": 18,
+    "c3.ax": 19,
+    "c3.py": 20,
+}
+OBS_DIM = 21
+MISSING_NEIGHBOR_BLOCK = np.array([1000.0, 0.0, 0.0, 0.0], dtype=np.float32)
+MISSING_EGO_OBS = np.zeros(OBS_DIM, dtype=np.float32)
+
+
+def _validate_obs21(obs: np.ndarray) -> np.ndarray:
+    """
+    Enforce the locked 21-D observation contract:
+      - exact shape (21,)
+      - float32 dtype
+      - finite values only (no NaN/Inf)
+    """
+    arr = np.asarray(obs, dtype=np.float32)
+    if arr.shape != (OBS_DIM,):
+        raise ValueError(f"Expected observation shape ({OBS_DIM},), got {arr.shape}")
+    if not np.all(np.isfinite(arr)):
+        raise ValueError("Observation contains non-finite values (NaN/Inf)")
+    return arr
+
 
 # ----------------- HELPERS -----------------
 def _fill_neighbor_block(obs: np.ndarray,
@@ -34,7 +84,7 @@ def _fill_neighbor_block(obs: np.ndarray,
     without lane-relative coordinates.
     """
     if veh_id is None:
-        obs[start_idx:start_idx + 4] = [1000.0, 0.0, 0.0, 0.0]
+        obs[start_idx:start_idx + 4] = MISSING_NEIGHBOR_BLOCK
         return
 
     try:
@@ -64,7 +114,7 @@ def _fill_neighbor_block(obs: np.ndarray,
 
         obs[start_idx:start_idx + 4] = [Dx, v, a, Py]
     except traci.TraCIException:
-        obs[start_idx:start_idx + 4] = [1000.0, 0.0, 0.0, 0.0]
+        obs[start_idx:start_idx + 4] = MISSING_NEIGHBOR_BLOCK
 
 
 def _find_leader_follower_in_lane(ego_id: str, lane_id: str):
@@ -139,20 +189,26 @@ def _get_target_lane_index(ego_id: str) -> int:
         return curr_idx  # already in right-most / target lane
 
 
-# ----------------- MAIN STATE EXTRACTION -----------------
-def get_state(ego_id: str) -> np.ndarray:
+def get_state_with_info(ego_id: str) -> tuple[np.ndarray, dict]:
     """
     Return the 21-dim state vector used in Ye et al.:
         [ego(5), C0(4), C1(4), C2(4), C3(4)]
     ego:  [Px, Vx, Ax, Py, Vy]  — X = forward (longitudinal), Y = lateral
     Ci:   [Dx_i, Vx_i, Ax_i, Py_i]
 
-    Returns zeros if ego_id is not in the simulation.
+    Returns:
+      - obs: np.ndarray with shape (21,)
+      - state_info: dict with extraction metadata for debugging/sanity checks
     """
     if ego_id not in traci.vehicle.getIDList():
-        return np.zeros(21, dtype=np.float32)
+        return _validate_obs21(MISSING_EGO_OBS.copy()), {
+            "ego_present": False,
+            "target_lane_exists": False,
+            "missing_neighbors": 4,
+            "state_valid": False,
+        }
 
-    obs = np.zeros(21, dtype=np.float32)
+    obs = np.zeros(OBS_DIM, dtype=np.float32)
 
     # --------- EGO FEATURES (5) ---------
     x_e, y_e = traci.vehicle.getPosition(ego_id)  # world X = forward, world Y = lateral
@@ -202,4 +258,20 @@ def get_state(ego_id: str) -> np.ndarray:
     _fill_neighbor_block(obs, START_C2, x_e, c2, ego_id)
     _fill_neighbor_block(obs, START_C3, x_e, c3, ego_id)
 
+    validated = _validate_obs21(obs)
+    missing_neighbors = sum(v is None for v in (c0, c1, c2, c3))
+    return validated, {
+        "ego_present": True,
+        "target_lane_exists": target_lane_id is not None,
+        "missing_neighbors": int(missing_neighbors),
+        "state_valid": True,
+    }
+
+
+# ----------------- MAIN STATE EXTRACTION -----------------
+def get_state(ego_id: str) -> np.ndarray:
+    """
+    Backward-compatible wrapper returning only the 21-D observation.
+    """
+    obs, _ = get_state_with_info(ego_id)
     return obs
