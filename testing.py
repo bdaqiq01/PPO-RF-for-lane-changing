@@ -81,15 +81,40 @@ def run_debug_rollout(args):
         for ep in range(args.episodes):
             obs, info = env.reset(seed=args.seed + ep)
             prev_lane_idx = env._safe_get_lane_index()
+            prev_pending_lc = info.get("pending_lc")
             print(
                 f"\n[EP {ep + 1}] reset ego_id={info.get('ego_id')} "
-                f"lane_idx={prev_lane_idx} missing_neighbors={info.get('missing_neighbors')}"
+                f"lane_idx={prev_lane_idx} missing_neighbors={info.get('missing_neighbors')} "
+                f"pending_lc={info.get('pending_lc')} "
+                f"lc_start_lane={info.get('lc_start_lane')} "
+                f"lc_target_lane={info.get('lc_target_lane')}"
             )
 
             for t in range(1, args.steps + 1):
                 action = pick_action(t, args.action_mode)
                 obs, reward, terminated, truncated, info = env.step(action)
                 lane_idx = env._safe_get_lane_index()
+                pending_lc = info.get("pending_lc")
+                lc_success = info.get("lc_success")
+                lc_fail_reason = info.get("lc_fail_reason")
+
+                # Print Layer-3 FSM info for first few steps and whenever it changes/events fire.
+                if (
+                    t <= 5
+                    or pending_lc != prev_pending_lc
+                    or lc_success
+                    or lc_fail_reason is not None
+                ):
+                    print(
+                        f"[EP {ep + 1} STEP {t}] FSM "
+                        f"pending_lc={pending_lc} "
+                        f"lc_success={lc_success} "
+                        f"lc_fail_reason={lc_fail_reason} "
+                        f"lc_start_lane={info.get('lc_start_lane')} "
+                        f"lc_target_lane={info.get('lc_target_lane')} "
+                        f"curr_lane={info.get('curr_lane')}"
+                    )
+
                 if lane_idx != prev_lane_idx:
                     print(
                         f"[EP {ep + 1} STEP {t}] lane change: "
@@ -97,6 +122,7 @@ def run_debug_rollout(args):
                     )
                     total_lane_changes += 1
                 prev_lane_idx = lane_idx
+                prev_pending_lc = pending_lc
 
                 if terminated or truncated:
                     print(

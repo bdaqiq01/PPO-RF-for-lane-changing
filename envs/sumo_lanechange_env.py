@@ -29,6 +29,7 @@ class SumoLaneChangeEnv(gym.Env):
                  max_steps,  #max steps per episode
                  ego_flow_id, #flow id to choose ego from 
                  control_zone_edge, #edge where the ego vehicle is controlled
+                 lc_step = 20, 
                  debug_mode: bool = False,
                  use_gui: bool = False,  # launch sumo-gui instead of sumo (for debugging)
                  start_lane: int = 1,  #ego car lane in the control zone
@@ -48,6 +49,7 @@ class SumoLaneChangeEnv(gym.Env):
         self.ego_id = None                   # will hold the chosen SUMO vehicle in the select_ego_from_flow() helper during reset()
         
         self.start_lane = start_lane # the state lane of the ego vehicle in the control zone
+        self.target_lane = target_lane # configured target lane in the control zone
         self.control_zone_edge_ID = control_zone_edge # the edge where the ego vehicle is controlled
         
         # --- Gym spaces  ---
@@ -72,6 +74,13 @@ class SumoLaneChangeEnv(gym.Env):
         # connection without requiring changes to state_extraction.py.
         self._traci_label = f"sumo_{id(self)}"
 
+        #tracking lane change variables
+        self._pending_lc = False #whether a lane change is pending
+        self._lc_start_lane = None # runtime lane where current LC attempt started
+        self._lc_target_lane = None # runtime target lane for current LC attempt
+        self._lc_start_step = None #the step the ego vehicle starts lane changing
+        self._lc_max_steps = lc_step #the maximum number of steps a lane change can take
+
     def reset(self, seed=None, options=None):
         #1. gym seed handling
         """Start (or restart) SUMO, choose an ego from the desired flow, and return the initial observation for a new episode."""
@@ -93,6 +102,7 @@ class SumoLaneChangeEnv(gym.Env):
         self._steps = 0
         self._obs_min = None # reset the observation min and max to None
         self._obs_max = None
+        self._clear_pending_lc()
 
         warmup_steps = 40  # enough for multiple flow vehicles to reach the control zone edge
         #4. start a new TraCI session
@@ -168,11 +178,23 @@ class SumoLaneChangeEnv(gym.Env):
             if self.debug_mode:
                 print(f"[STEP {self._steps}] ego gone — reason={reason}")
             obs = np.zeros(self.observation_space.shape, dtype=np.float32)
-            info = {"ego_id": self.ego_id, "step": self._steps, "reason": reason}
+            if self._pending_lc:
+                lc_fail_reason = reason
+                self._clear_pending_lc()
+            else:
+                lc_fail_reason = None
+            lc_info = self._build_lc_info(
+                curr_lane=None,
+                lc_success=False,
+                lc_fail_reason=lc_fail_reason,
+            )
+            info = {"ego_id": self.ego_id, "step": self._steps, "reason": reason, **lc_info}
             return obs, 0.0, True, False, info
 
         # Layer 2: decode and apply action to SUMO before advancing the simulation.
         lon_cmd, lat_cmd = decode_action(int(action))
+        pre_lane = self._safe_get_lane_index()
+        self._maybe_start_pending_lc(lat_cmd=lat_cmd, curr_lane=pre_lane) #what is the point of this 
         pre_obs, _ = self._get_state()
         self._apply_action(pre_obs, lon_cmd, lat_cmd)
 
@@ -184,13 +206,43 @@ class SumoLaneChangeEnv(gym.Env):
             reason = self._classify_ego_disappearance(default_reason="ego_missing_post")
             if self.debug_mode:
                 print(f"[STEP {self._steps}] ego gone after simulationStep — reason={reason}")
+            if self._pending_lc:
+                lc_fail_reason = reason
+                self._clear_pending_lc()
+            else:
+                lc_fail_reason = None
+            lc_info = self._build_lc_info(
+                curr_lane=None,
+                lc_success=False,
+                lc_fail_reason=lc_fail_reason,
+            )
             info = {
                 "ego_id": self.ego_id,
                 "step": self._steps,
                 "reason": reason,
                 **state_info,
+                **lc_info,
             }
             return obs, 0.0, True, False, info
+        #if the ego vehicle is present, check if a lane change is pending
+        curr_lane = self._safe_get_lane_index()
+        lc_success = False
+        lc_fail_reason = None
+        # Layer 3 strict lane-change detection:
+        # success only on an actual lane-index transition to configured target lane
+        # while an LC attempt is pending.
+        if self._pending_lc and curr_lane is not None:
+            if (
+                self._lc_start_lane is not None
+                and self._lc_target_lane is not None
+                and curr_lane != self._lc_start_lane
+                and curr_lane == self._lc_target_lane
+            ):
+                lc_success = True
+                self._clear_pending_lc()
+            elif self._lc_start_step is not None and (self._steps - self._lc_start_step) > self._lc_max_steps:
+                lc_fail_reason = "lc_timeout"
+                self._clear_pending_lc()
 
         if self.debug_mode:
             self._update_obs_debug_stats(obs)
@@ -206,6 +258,7 @@ class SumoLaneChangeEnv(gym.Env):
             "ego_id": self.ego_id,
             "step": self._steps,
             **state_info,
+            **self._build_lc_info(curr_lane=curr_lane, lc_success=lc_success, lc_fail_reason=lc_fail_reason),
         }
 
         # Layer 0: no terminal conditions yet — only the time-limit truncation.
@@ -237,6 +290,42 @@ class SumoLaneChangeEnv(gym.Env):
 
     def _get_state(self):
         return get_state_with_info(self.ego_id)
+
+    def _clear_pending_lc(self):
+        self._pending_lc = False
+        self._lc_start_lane = None
+        self._lc_target_lane = None
+        self._lc_start_step = None
+
+    def _maybe_start_pending_lc(self, lat_cmd: int, curr_lane: int | None):
+        if self._pending_lc:
+            return
+        if lat_cmd != 1:
+            return
+        if curr_lane is None:
+            return
+        # If ego is already in configured target lane, do not arm a new LC attempt.
+        if int(curr_lane) == int(self.target_lane):
+            return
+        self._pending_lc = True
+        self._lc_start_lane = int(curr_lane)
+        # Use configured scenario target lane (Layer 3 requirement).
+        self._lc_target_lane = int(self.target_lane)
+        self._lc_start_step = int(self._steps)
+
+    def _build_lc_info(self, curr_lane: int | None, lc_success: bool, lc_fail_reason: str | None):
+        return {
+            "pending_lc": self._pending_lc,
+            "lc_success": bool(lc_success),
+            "lc_fail_reason": lc_fail_reason,
+            "lc_start_lane": self._lc_start_lane,
+            "lc_target_lane": self._lc_target_lane,
+            "curr_lane": curr_lane,
+            # Validation signal: scenario expectation vs runtime LC start lane.
+            "lc_start_lane_matches_config": (
+                None if self._lc_start_lane is None else (self._lc_start_lane == self.start_lane)
+            ),
+        }
 
     def _classify_ego_disappearance(self, default_reason: str) -> str:
         """
