@@ -11,8 +11,9 @@ from controllers.lateral_controller import LateralController  # low-level latera
 from utils.action_decoder import decode_action
 from utils.safety_intervention import DS_THRESHOLD, apply_safety_intervention
 from utils.state_extraction import (
-    get_state_with_info,   # builds the 21-d observation + metadata
+    get_state_with_info,   # builds the goal-conditioned observation + metadata
     OBS21_SCHEMA,
+    OBS_DIM,
 )
 
 
@@ -96,7 +97,10 @@ class SumoLaneChangeEnv(gym.Env):
         self.exit_edge_id = exit_edge_id  # optional route target after successful LC in control zone
         
         # --- Gym spaces  ---
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(21,), dtype=np.float32)  # 21 continuous features
+        # Observation layout (OBS_DIM features) defined in utils/state_extraction.py:
+        #   [ego(5), C0(4), C1(4), C2(4), C3(4), lane_error(1)]
+        # The trailing `lane_error` makes the policy goal-conditioned on target_lane.
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(OBS_DIM,), dtype=np.float32)
         self.action_space = spaces.Discrete(6)                                      # 6 discrete actions
 
         self._steps = 0
@@ -445,22 +449,27 @@ class SumoLaneChangeEnv(gym.Env):
 
     def _get_state(self):
         """
-        Returns the state of the ego vehicle and the surrounding vehicles.
+        Returns the state of the ego vehicle and the surrounding vehicles
         and the state information for debugging/sanity checks.
-        The state is a 21-dimensional vector with the following features:
+
+        The state is an OBS_DIM-dimensional vector with the following features:
         - ego: [Px, Vx, Ax, Py, Vy]
-        - c0: [Dx, Vx, Ax, Py]
-        - c1: [Dx, Vx, Ax, Py]
-        - c2: [Dx, Vx, Ax, Py]
-        - c3: [Dx, Vx, Ax, Py]
+        - c0:  [Dx, Vx, Ax, Py]   current-lane leader
+        - c1:  [Dx, Vx, Ax, Py]   target-lane leader   (uses self.target_lane)
+        - c2:  [Dx, Vx, Ax, Py]   current-lane follower
+        - c3:  [Dx, Vx, Ax, Py]   target-lane follower (uses self.target_lane)
+        - lane_error: target_lane - current_lane  (signed scalar, goal feature)
+
         The state information is a dictionary with the following keys:
         - ego_present: whether the ego vehicle is present
-        - target_lane_exists: whether the target lane exists
+        - target_lane_exists: whether the target lane exists on the current edge
         - missing_neighbors: the number of missing neighbors
         - state_valid: whether the state is valid
-
+        - target_lane_index: the configured target lane (echoed for debugging)
+        - current_lane_index: the ego's current lane index (or None)
+        - lane_error: float, equal to obs[-1]
         """
-        return get_state_with_info(self.ego_id)
+        return get_state_with_info(self.ego_id, target_lane_index=int(self.target_lane))
 
     def _clear_pending_lc(self):
         self._pending_lc = False
@@ -594,7 +603,7 @@ class SumoLaneChangeEnv(gym.Env):
         if self.ego_id not in traci.vehicle.getIDList():
             return
         try:
-            self.lateral_ctrl.execute(self.ego_id, lat_cmd)
+            self.lateral_ctrl.execute(self.ego_id, lat_cmd, target_lane_index=int(self.target_lane))
         except traci.TraCIException:
             # Non-fatal in Layer 2; proceed with simulation step.
             pass
@@ -660,9 +669,12 @@ class SumoLaneChangeEnv(gym.Env):
         c0_dx = float(obs[OBS21_SCHEMA["c0.dx"]])  # current-lane leader gap
         c1_dx = float(obs[OBS21_SCHEMA["c1.dx"]])  # target-lane leader gap
         c3_dx = float(obs[OBS21_SCHEMA["c3.dx"]])  # target-lane follower gap
+        lane_error = float(obs[OBS21_SCHEMA["lane_error"]])
         print(
             f"{prefix} ego_px={ego_px:.3f} ego_vx={ego_vx:.3f} ego_py={ego_py:.3f} "
             f"c0_dx={c0_dx:.3f} c1_dx={c1_dx:.3f} c3_dx={c3_dx:.3f} "
+            f"lane_error={lane_error:+.1f} target_lane={self.target_lane} "
+            f"curr_lane={state_info.get('current_lane_index')} "
             f"ego_present={state_info.get('ego_present')} "
             f"missing_neighbors={state_info.get('missing_neighbors')}"
         )

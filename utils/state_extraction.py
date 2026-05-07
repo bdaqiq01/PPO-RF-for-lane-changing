@@ -16,9 +16,11 @@ START_C1 = 9   # target-lane leader
 START_C2 = 13  # current-lane follower
 START_C3 = 17  # target-lane follower
 
-# ----------------- LOCKED 21-D SCHEMA -----------------
+# ----------------- LOCKED 22-D SCHEMA -----------------
 # Keep this map as the single source of truth for observation indices.
 # The environment and any reward/safety logic should reference this layout.
+# Name kept as OBS21_SCHEMA for backward compatibility with existing imports;
+# dimension is now 22 with an appended goal-conditioning feature `lane_error`.
 OBS21_SCHEMA = {
     # Ego block (5)
     "ego.px": 0,  # forward position (X)
@@ -46,16 +48,23 @@ OBS21_SCHEMA = {
     "c3.vx": 18,
     "c3.ax": 19,
     "c3.py": 20,
+    # Goal-conditioning feature (1): signed distance to target lane.
+    # lane_error = target_lane_index - current_lane_index
+    #   negative -> target is to the right (SUMO lane idx decreases right)
+    #   zero     -> already in target lane
+    #   positive -> target is to the left
+    "lane_error": 21,
 }
-OBS_DIM = 21
+OBS_DIM = 22
+IDX_LANE_ERROR = OBS21_SCHEMA["lane_error"]
 MISSING_NEIGHBOR_BLOCK = np.array([1000.0, 0.0, 0.0, 0.0], dtype=np.float32)
 MISSING_EGO_OBS = np.zeros(OBS_DIM, dtype=np.float32)
 
 
-def _validate_obs21(obs: np.ndarray) -> np.ndarray:
+def _validate_obs(obs: np.ndarray) -> np.ndarray:
     """
-    Enforce the locked 21-D observation contract:
-      - exact shape (21,)
+    Enforce the locked observation contract:
+      - exact shape (OBS_DIM,)
       - float32 dtype
       - finite values only (no NaN/Inf)
     """
@@ -65,6 +74,10 @@ def _validate_obs21(obs: np.ndarray) -> np.ndarray:
     if not np.all(np.isfinite(arr)):
         raise ValueError("Observation contains non-finite values (NaN/Inf)")
     return arr
+
+
+# Back-compat alias for any external callers that imported _validate_obs21.
+_validate_obs21 = _validate_obs
 
 
 # ----------------- HELPERS -----------------
@@ -174,38 +187,34 @@ def _find_leader_follower_in_lane(ego_id: str, lane_id: str):
     return leader_id, follower_id
 
 
-def _get_target_lane_index(ego_id: str) -> int:
+def get_state_with_info(
+    ego_id: str,
+    target_lane_index: int,
+) -> tuple[np.ndarray, dict]:
     """
-    Mandatory route: main -> off-ramp.
-    In the paper's network the off-ramp is on the right, so the target
-    lane is always the lane immediately to the RIGHT of the ego
-    (if such a lane exists).
-    """
-    curr_idx = traci.vehicle.getLaneIndex(ego_id)
-    # SUMO uses 0 = right-most lane, larger index = more to the left.
-    if curr_idx > 0:
-        return curr_idx - 1
-    else:
-        return curr_idx  # already in right-most / target lane
+    Return the 22-dim state vector:
+        [ego(5), C0(4), C1(4), C2(4), C3(4), lane_error(1)]
+    ego:        [Px, Vx, Ax, Py, Vy]  — X = forward (longitudinal), Y = lateral
+    Ci:         [Dx_i, Vx_i, Ax_i, Py_i]
+    lane_error: target_lane_index - current_lane_index   (signed scalar)
 
-
-def get_state_with_info(ego_id: str) -> tuple[np.ndarray, dict]:
-    """
-    Return the 21-dim state vector used in Ye et al.:
-        [ego(5), C0(4), C1(4), C2(4), C3(4)]
-    ego:  [Px, Vx, Ax, Py, Vy]  — X = forward (longitudinal), Y = lateral
-    Ci:   [Dx_i, Vx_i, Ax_i, Py_i]
+    The target lane is supplied by the caller (env) rather than inferred from
+    geometry. This makes the policy goal-conditioned and works for both
+    left and right lane changes.
 
     Returns:
-      - obs: np.ndarray with shape (21,)
+      - obs: np.ndarray with shape (OBS_DIM,)
       - state_info: dict with extraction metadata for debugging/sanity checks
     """
     if ego_id not in traci.vehicle.getIDList():
-        return _validate_obs21(MISSING_EGO_OBS.copy()), {
+        return _validate_obs(MISSING_EGO_OBS.copy()), {
             "ego_present": False,
             "target_lane_exists": False,
             "missing_neighbors": 4,
             "state_valid": False,
+            "target_lane_index": int(target_lane_index),
+            "current_lane_index": None,
+            "lane_error": 0.0,
         }
 
     obs = np.zeros(OBS_DIM, dtype=np.float32)
@@ -234,22 +243,26 @@ def get_state_with_info(ego_id: str) -> tuple[np.ndarray, dict]:
     # --------- SURROUNDING VEHICLES (4 x 4) ---------
     curr_lane_id = traci.vehicle.getLaneID(ego_id)
     curr_edge_id = traci.vehicle.getRoadID(ego_id)
-    target_lane_index = _get_target_lane_index(ego_id)
+    curr_lane_index = traci.vehicle.getLaneIndex(ego_id)
 
     target_lane_id = None
     try:
-        target_lane_id = f"{curr_edge_id}_{target_lane_index}"
-        _ = traci.lane.getLength(target_lane_id)
+        candidate_id = f"{curr_edge_id}_{int(target_lane_index)}"
+        _ = traci.lane.getLength(candidate_id)
+        target_lane_id = candidate_id
     except traci.TraCIException:
         target_lane_id = None
 
     # C0 / C2: current-lane leader & follower
     c0, c2 = _find_leader_follower_in_lane(ego_id, curr_lane_id)
 
-    # C1 / C3: target-lane leader & follower (if target lane exists)
-    if target_lane_id is not None:
+    # C1 / C3: target-lane leader & follower (if target lane exists on this edge)
+    if target_lane_id is not None and int(target_lane_index) != int(curr_lane_index):
         c1, c3 = _find_leader_follower_in_lane(ego_id, target_lane_id)
     else:
+        # Already in target lane (or target lane not present on this edge):
+        # C1/C3 collapse to "missing neighbor" so safety logic treats the
+        # change-lane action as free (it's a no-op anyway).
         c1 = c3 = None
 
     # Fill each 4-d block [Dx, Vx, Ax, Py] — pass x_e as world-X forward fallback
@@ -258,20 +271,26 @@ def get_state_with_info(ego_id: str) -> tuple[np.ndarray, dict]:
     _fill_neighbor_block(obs, START_C2, x_e, c2, ego_id)
     _fill_neighbor_block(obs, START_C3, x_e, c3, ego_id)
 
-    validated = _validate_obs21(obs)
+    # --------- GOAL FEATURE: lane_error ---------
+    obs[IDX_LANE_ERROR] = float(int(target_lane_index) - int(curr_lane_index))
+
+    validated = _validate_obs(obs)
     missing_neighbors = sum(v is None for v in (c0, c1, c2, c3))
     return validated, {
         "ego_present": True,
         "target_lane_exists": target_lane_id is not None,
         "missing_neighbors": int(missing_neighbors),
         "state_valid": True,
+        "target_lane_index": int(target_lane_index),
+        "current_lane_index": int(curr_lane_index),
+        "lane_error": float(obs[IDX_LANE_ERROR]),
     }
 
 
 # ----------------- MAIN STATE EXTRACTION -----------------
-def get_state(ego_id: str) -> np.ndarray:
+def get_state(ego_id: str, target_lane_index: int) -> np.ndarray:
     """
-    Backward-compatible wrapper returning only the 21-D observation.
+    Backward-compatible wrapper returning only the observation vector.
     """
-    obs, _ = get_state_with_info(ego_id)
+    obs, _ = get_state_with_info(ego_id, target_lane_index)
     return obs
