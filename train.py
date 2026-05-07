@@ -39,38 +39,63 @@ IDM_S0 = 2.0         # m
 # --- Lateral controller ---
 LANE_CHANGE_DURATION = 3  # seconds lane change duration
 LANE_CHANGE_DETECTION_DISTANCE = 10  # meters lane change detection distance 
-FLOW_ID = 'f_2'   #flow id to choose the ego vehicle from
 CONTROL_ZONE_EDGE = "E0.212"  #edge where the ego vehicle is controlled
-SPAWN_EDGE_ID = "E0"  #edge the ego vehicle spawns from 
+SPAWN_EDGE_ID = "E0"  #edge the ego vehicle spawns from
 SPAWN_LANE_ID = "E0_0"  #lane in the spawn edge the ego vehicle spawns from
-START_LANE_ID = 1 #lane index the ego vehicle starts in the control zone 
-TARGET_LANE_ID = 0 #lane index the ego vehicle is supposed to change to in the control zone
-EXIT_EDGE_ID = "E2" #edge the ego vehicle is to take to after commiting to the lane change after the control zone 
-EXIT_LANE_ID = "E2" #lane in the exit edge the ego vehicle is to take to after commiting to the lane change after the control zone
 GATE_POS = 235.0
 
+# Goal-randomization scenarios: per-episode reset() picks one uniformly via the
+# gym-seeded RNG. Both directions are present so the model learns to use the
+# lane_error obs feature instead of memorizing one direction.
+#
+# Right LC (main -> off-ramp): ego enters in lane 1 of E0.212 (from f_2), needs
+# to merge right into the off-ramp lane (lane 0). On success, route is committed
+# to E2 (off-ramp).
+# Left  LC (on-ramp -> main):  ego enters in lane 0 of E0.212 (from
+# f_onramp_to_offramp, which routes vehicles from on-ramp E1 to off-ramp E2),
+# needs to merge left into the main continuation lane (lane 1). On success,
+# route must be re-committed to E0.497 because E2 is unreachable from lane 1
+# (no connection from E0.212_1 to E2 in the network).
+SCENARIOS = [
+    dict(start_lane=1, target_lane=0, ego_flow_id="f_2",                 exit_edge_id="E2"),
+    dict(start_lane=0, target_lane=1, ego_flow_id="f_onramp_to_offramp", exit_edge_id="E0.497"),
+]
 
-env = SumoLaneChangeEnv(
-    sumo_cfg_path="SUMO_sim/base2_compl/2lane_oneOnOff.sumocfg", 
-    step_length=STEP_LENGTH, 
-    max_steps=max_episode_steps, 
-    ego_flow_id=FLOW_ID, 
-    control_zone_edge=CONTROL_ZONE_EDGE,
-    debug_mode=True,
-    use_gui=False,   # TEMPORARY – revert before training
-    start_lane= START_LANE_ID,
-    target_lane = TARGET_LANE_ID ,
-    #IDM parameters
-    idm_params=dict(
-        v0=IDM_V0, 
-        T=IDM_T, a_max=IDM_A_MAX, 
-        b_comf=IDM_B_COMF, 
-        s0=IDM_S0), 
-    #Lateral parameters
-    lateral_params=dict(
-        lane_change_duration=LANE_CHANGE_DURATION, 
-        lane_change_detection_distance=LANE_CHANGE_DETECTION_DISTANCE), 
-    exit_edge_id=EXIT_EDGE_ID) 
+# Defaults handed to the constructor in case scenarios=None at some future point;
+# with scenarios set they're overwritten on every reset().
+START_LANE_ID = SCENARIOS[0]["start_lane"]
+TARGET_LANE_ID = SCENARIOS[0]["target_lane"]
+FLOW_ID = SCENARIOS[0]["ego_flow_id"]
+EXIT_EDGE_ID = SCENARIOS[0]["exit_edge_id"]
+
+
+def _make_env(scenarios, debug_mode=False, use_gui=False):
+    return SumoLaneChangeEnv(
+        sumo_cfg_path="SUMO_sim/base2_compl/2lane_oneOnOff.sumocfg",
+        step_length=STEP_LENGTH,
+        max_steps=max_episode_steps,
+        ego_flow_id=FLOW_ID,
+        control_zone_edge=CONTROL_ZONE_EDGE,
+        debug_mode=debug_mode,
+        use_gui=use_gui,
+        start_lane=START_LANE_ID,
+        target_lane=TARGET_LANE_ID,
+        idm_params=dict(
+            v0=IDM_V0,
+            T=IDM_T, a_max=IDM_A_MAX,
+            b_comf=IDM_B_COMF,
+            s0=IDM_S0),
+        lateral_params=dict(
+            lane_change_duration=LANE_CHANGE_DURATION,
+            lane_change_detection_distance=LANE_CHANGE_DETECTION_DISTANCE),
+        exit_edge_id=EXIT_EDGE_ID,
+        scenarios=scenarios,
+    )
+
+
+# Training env: randomizes across both LC directions every episode so the
+# policy is forced to use the lane_error obs feature for goal-conditioning.
+env = _make_env(scenarios=SCENARIOS, debug_mode=True, use_gui=False)
 
 # Wrap training env with Monitor so SB3 gets correct episode lengths/rewards
 print("training env initialized")
@@ -87,28 +112,13 @@ policy_kwargs = dict(
 os.makedirs('./logs/', exist_ok=True)
 os.makedirs('./checkpoints/', exist_ok=True)
 
-# Create a separate evaluation environment
-eval_env = SumoLaneChangeEnv(
-    sumo_cfg_path="SUMO_sim/base2_compl/2lane_oneOnOff.sumocfg", 
-    step_length=STEP_LENGTH, 
-    max_steps=max_episode_steps, 
-    ego_flow_id=FLOW_ID,
-    control_zone_edge=CONTROL_ZONE_EDGE,
-    start_lane= START_LANE_ID,
-    target_lane = TARGET_LANE_ID,
-    idm_params=dict(
-        v0=IDM_V0, 
-        T=IDM_T, a_max=IDM_A_MAX, 
-        b_comf=IDM_B_COMF, 
-        s0=IDM_S0), 
-    lateral_params=dict(
-        lane_change_duration=LANE_CHANGE_DURATION, 
-        lane_change_detection_distance=LANE_CHANGE_DETECTION_DISTANCE), 
-    exit_edge_id=EXIT_EDGE_ID)
-print("eval env initialized")
-
-# Wrap eval env with Monitor (removes SB3 warning and ensures clean eval stats)
-eval_env = Monitor(eval_env)
+# Two evaluation envs, one per LC direction. This way TensorBoard / CSV logs
+# show separate eval reward curves for right-LC vs left-LC, making asymmetry
+# (one direction learning faster than the other) immediately visible.
+eval_env_right = Monitor(_make_env(scenarios=[SCENARIOS[0]], debug_mode=False))
+print("eval env (right LC: main -> off-ramp) initialized")
+eval_env_left = Monitor(_make_env(scenarios=[SCENARIOS[1]], debug_mode=False))
+print("eval env (left LC: on-ramp -> main) initialized")
 
 
 log_dir = "./logs/run_001"
@@ -148,18 +158,29 @@ model = PPO(
 
 model.set_logger(logger)
 
-# Create callbacks
-eval_callback = EvalCallback(
-    eval_env,
+# Per-direction eval callbacks. Best-model selection follows the right-LC
+# eval (which matches the historical scenario); the left-LC callback is
+# logging-only so we can see the per-direction curves separately.
+# evaluations.npz saving is disabled (log_path=None) to avoid NumPy
+# inhomogeneous-array errors observed with newer NumPy/SB3 versions.
+eval_callback_right = EvalCallback(
+    eval_env_right,
     best_model_save_path=log_dir,
-    # IMPORTANT: Disable saving evaluations.npz to avoid NumPy shape errors
-    # with inhomogeneous result arrays when using newer NumPy/SB3 versions.
-    # We still save the best model weights via best_model_save_path.
     log_path=None,
-    eval_freq=10000,  # Evaluate every 10k steps
+    eval_freq=10000,
     deterministic=True,
     render=False,
-    n_eval_episodes=10,  # Run 10 episodes for evaluation
+    n_eval_episodes=10,
+    verbose=0,
+)
+eval_callback_left = EvalCallback(
+    eval_env_left,
+    best_model_save_path=None,
+    log_path=None,
+    eval_freq=10000,
+    deterministic=True,
+    render=False,
+    n_eval_episodes=10,
     verbose=0,
 )
 
@@ -171,9 +192,8 @@ checkpoint_callback = CheckpointCallback(
 
 
 
-# Update model.learn() to include callbacks
 model.learn(
     total_timesteps=TOTAL_TIMESTEPS,
-    callback=[eval_callback, checkpoint_callback]  # Add callbacks here
+    callback=[eval_callback_right, eval_callback_left, checkpoint_callback]
 )
 model.save(MODEL_NAME)

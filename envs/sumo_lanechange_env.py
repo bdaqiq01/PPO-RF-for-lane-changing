@@ -84,7 +84,14 @@ class SumoLaneChangeEnv(gym.Env):
                  target_lane: int = 0,  #target lane in the control zone (offramp lane)
                  idm_params = None,
                  lateral_params = None, 
-                 exit_edge_id = None #the edge the ego vehicle is routed in the after commiting to at the GATE):
+                 exit_edge_id = None, #the edge the ego vehicle is routed in the after commiting to at the GATE):
+                 scenarios: list[dict] | None = None,
+                 # Optional list of per-episode scenarios for goal randomization.
+                 # Each dict may set: start_lane, target_lane, ego_flow_id, exit_edge_id.
+                 # When provided, reset() samples one with the gym-seeded RNG and
+                 # overrides the corresponding self.* attributes for that episode.
+                 # When None (default), the env behaves as a fixed single-scenario
+                 # env using the constructor args above (back-compat).
     ):
         
         super().__init__()       
@@ -100,6 +107,16 @@ class SumoLaneChangeEnv(gym.Env):
         self.target_lane = target_lane # configured target lane in the control zone
         self.control_zone_edge_ID = control_zone_edge # the edge where the ego vehicle is controlled
         self.exit_edge_id = exit_edge_id  # optional route target after successful LC in control zone
+        # Snapshot the constructor defaults so a fresh reset() that doesn't sample
+        # a scenario (i.e. self._scenarios is None) still gets a deterministic
+        # starting state even after a previous scenario sample mutated self.*.
+        self._default_start_lane = start_lane
+        self._default_target_lane = target_lane
+        self._default_ego_flow_id = ego_flow_id
+        self._default_exit_edge_id = exit_edge_id
+        self._scenarios = list(scenarios) if scenarios else None
+        if self._scenarios is not None and len(self._scenarios) == 0:
+            self._scenarios = None
         
         # --- Gym spaces  ---
         # Observation layout (OBS_DIM features) defined in utils/state_extraction.py:
@@ -141,6 +158,25 @@ class SumoLaneChangeEnv(gym.Env):
         #1. gym seed handling
         """Start (or restart) SUMO, choose an ego from the desired flow, and return the initial observation for a new episode."""
         super().reset(seed=seed)                       # inform Gym we've reset
+
+        # 1b. Sample per-episode scenario if randomization is configured.
+        # This must happen AFTER super().reset(seed=seed) so we use the
+        # gym-seeded RNG (reproducible). It must happen BEFORE the SUMO
+        # subprocess is started and the ego is selected, since the chosen
+        # flow / start lane drive _choose_ego_from_flow's filters.
+        if self._scenarios is not None:
+            scenario = self._scenarios[int(self.np_random.integers(0, len(self._scenarios)))]
+            self.start_lane = int(scenario.get("start_lane", self._default_start_lane))
+            self.target_lane = int(scenario.get("target_lane", self._default_target_lane))
+            self.ego_flow_id = str(scenario.get("ego_flow_id", self._default_ego_flow_id))
+            self.exit_edge_id = scenario.get("exit_edge_id", self._default_exit_edge_id)
+            if self.debug_mode:
+                print(
+                    f"[RESET] sampled scenario: start_lane={self.start_lane} "
+                    f"target_lane={self.target_lane} flow={self.ego_flow_id} "
+                    f"exit_edge_id={self.exit_edge_id}"
+                )
+
         if seed is None:
             sumo_seed = int(self.np_random.integers(0, 2**31 - 1))
         else:
