@@ -72,7 +72,12 @@ class SumoLaneChangeEnv(gym.Env):
                  max_steps,  #max steps per episode
                  ego_flow_id, #flow id to choose ego from 
                  control_zone_edge, #edge where the ego vehicle is controlled
-                 lc_step = 20, 
+                 lc_step = 40,  # Steps allowed for a pending PPO-initiated LC to complete.
+                                # Must cover SUMO's lateral motion duration AND any time the
+                                # ego spends crossing internal junctions before the lane index
+                                # officially flips. With step_length=0.2s, 40 steps = 8s — long
+                                # enough for a 3s SUMO LC duration plus junction crossing in
+                                # a typical highway off-ramp scenario.
                  debug_mode: bool = False,
                  use_gui: bool = False,  # launch sumo-gui instead of sumo (for debugging)
                  start_lane: int = 1,  #ego car lane in the control zone
@@ -298,9 +303,13 @@ class SumoLaneChangeEnv(gym.Env):
             pre_lane = self._safe_get_lane_index()
             self._maybe_start_pending_lc(lat_cmd=lat_cmd_applied, curr_lane=pre_lane)
             self._apply_action(pre_obs, lon_cmd, lat_cmd_applied)
-        elif self._pending_lc:
-            # A pending PPO lane-change attempt does not persist after handoff to SUMO.
-            self._clear_pending_lc()
+        # NOTE: We intentionally do NOT clear self._pending_lc on handoff to SUMO.
+        # Lane-change completion (lane-index transition to target_lane) often happens
+        # AFTER the ego leaves the control zone — typically on the internal junction
+        # immediately after — because SUMO needs several steps to finish the lateral
+        # motion and re-index the lane. Clearing pending on handoff would silently
+        # drop those success events. Pending is now cleared only by the FSM
+        # (success or lc_max_steps timeout) or on ego disappearance.
 
         traci.simulationStep() 
 
@@ -419,7 +428,12 @@ class SumoLaneChangeEnv(gym.Env):
             "d2": None if controller_owner == "sumo" else d2,
             "route_committed": bool(route_committed),
             **state_info,
-            **self._build_lc_info(curr_lane=curr_lane, lc_success=lc_success, lc_fail_reason=lc_fail_reason),
+            **self._build_lc_info(
+                curr_lane=curr_lane,
+                lc_success=lc_success,
+                lc_fail_reason=lc_fail_reason,
+                in_control_zone=bool(in_control_zone),
+            ),
         }
 
         terminated = False
@@ -501,7 +515,13 @@ class SumoLaneChangeEnv(gym.Env):
         self._lc_target_lane = int(self.target_lane)
         self._lc_start_step = int(self._steps)
 
-    def _build_lc_info(self, curr_lane: int | None, lc_success: bool, lc_fail_reason: str | None):
+    def _build_lc_info(
+        self,
+        curr_lane: int | None,
+        lc_success: bool,
+        lc_fail_reason: str | None,
+        in_control_zone: bool = False,
+    ):
         """
         Builds the lane change information for the ego vehicle.
         The lane change information is a dictionary with the following keys:
@@ -511,7 +531,13 @@ class SumoLaneChangeEnv(gym.Env):
         - lc_start_lane: the lane the ego vehicle started lane changing from
         - lc_target_lane: the lane the ego vehicle is lane changing to
         - curr_lane: the current lane of the ego vehicle
-        - lc_start_lane_matches_config: whether the lane the ego vehicle started lane changing from matches the configured target lane
+        - lc_start_lane_matches_config: whether the lane the ego vehicle started
+          lane changing from matches the configured target lane
+        - lc_completed_outside_zone: True iff lc_success fired in the same step
+          where ``in_control_zone`` is False. Diagnostic only — distinguishes
+          "PPO triggered LC, completed inside zone" from "PPO triggered LC,
+          SUMO finished the lateral motion on the junction or exit edge after
+          handoff". Useful for reasoning about credit assignment.
         """
         return {
             "pending_lc": self._pending_lc,
@@ -524,6 +550,7 @@ class SumoLaneChangeEnv(gym.Env):
             "lc_start_lane_matches_config": (
                 None if self._lc_start_lane is None else (self._lc_start_lane == self.start_lane)
             ),
+            "lc_completed_outside_zone": bool(lc_success and not in_control_zone),
         }
 
     def _classify_ego_disappearance(self, default_reason: str) -> str:
