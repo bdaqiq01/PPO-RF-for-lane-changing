@@ -25,7 +25,8 @@ CLIP_RANGE = 0.2
 ENT_COEF = 0.01  # entropy weight c2 in Eq. (2) which encourages exploration by keeping the policy's action distribution less peaked and more randon, preventing premature convergence to suboptimal policies
 VF_COEF = 0.5
 MAX_GRAD_NORM = 0.5
-TOTAL_TIMESTEPS = 20000 #500_000 #total timesteps to train the model
+# Increase for full training (e.g. 500_000+). Current value is smoke-test scale.
+TOTAL_TIMESTEPS = 4096  #smoke test scale
 MODEL_NAME = "ppo_sumo_lanechange"
 max_episode_steps = 256 #int(60 / STEP_LENGTH) * 2  # experimenting with 2 episode per update
 
@@ -95,7 +96,8 @@ def _make_env(scenarios, debug_mode=False, use_gui=False):
 
 # Training env: randomizes across both LC directions every episode so the
 # policy is forced to use the lane_error obs feature for goal-conditioning.
-env = _make_env(scenarios=SCENARIOS, debug_mode=True, use_gui=False)
+# debug_mode=True floods stdout (every SUMO step); use only when debugging locally.
+env = _make_env(scenarios=SCENARIOS, debug_mode=False, use_gui=False)
 
 # Wrap training env with Monitor so SB3 gets correct episode lengths/rewards
 print("training env initialized")
@@ -153,7 +155,7 @@ model = PPO(
     max_grad_norm=MAX_GRAD_NORM,
     policy_kwargs=policy_kwargs,
     device="cpu",  # Use CPU for MLP (GPU is inefficient for MLP policies)
-    verbose=0,
+    verbose=1,  # Rollout/update stats appear in redirected SSH logs / terminal
 )
 
 model.set_logger(logger)
@@ -171,7 +173,7 @@ eval_callback_right = EvalCallback(
     deterministic=True,
     render=False,
     n_eval_episodes=10,
-    verbose=0,
+    verbose=1,  # Writes eval summaries to stderr (captures well in SSH log files)
 )
 eval_callback_left = EvalCallback(
     eval_env_left,
@@ -181,13 +183,13 @@ eval_callback_left = EvalCallback(
     deterministic=True,
     render=False,
     n_eval_episodes=10,
-    verbose=0,
+    verbose=1,
 )
 
 checkpoint_callback = CheckpointCallback(
-    save_freq=50000,  # Save checkpoint every 50k steps
+    save_freq=50000,  # Reduce (e.g. 10_000) if TOTAL_TIMESTEPS < 50k — else no checkpoints
     save_path='./checkpoints/',
-    name_prefix='ppo_sumo'
+    name_prefix='ppo_sumo',
 )
 
 

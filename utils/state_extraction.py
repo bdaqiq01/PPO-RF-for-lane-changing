@@ -190,6 +190,8 @@ def _find_leader_follower_in_lane(ego_id: str, lane_id: str):
 def get_state_with_info(
     ego_id: str,
     target_lane_index: int,
+    *,
+    control_zone_edge: str | None = None,
 ) -> tuple[np.ndarray, dict]:
     """
     Return the 22-dim state vector:
@@ -202,6 +204,12 @@ def get_state_with_info(
     geometry. This makes the policy goal-conditioned and works for both
     left and right lane changes.
 
+    If ``control_zone_edge`` is set and the ego's current edge differs from it,
+    the **effective** target lane index for this observation is the current lane
+    index (lane_error = 0, C1/C3 unused). The maneuver goal from ``target_lane_index``
+    only applies on the control-zone edge — not on exit ramps, internal junction
+    lanes, or downstream edges.
+
     Returns:
       - obs: np.ndarray with shape (OBS_DIM,)
       - state_info: dict with extraction metadata for debugging/sanity checks
@@ -213,6 +221,8 @@ def get_state_with_info(
             "missing_neighbors": 4,
             "state_valid": False,
             "target_lane_index": int(target_lane_index),
+            "effective_target_lane_index": None,
+            "lc_goal_in_obs": False,
             "current_lane_index": None,
             "lane_error": 0.0,
         }
@@ -245,19 +255,31 @@ def get_state_with_info(
     curr_edge_id = traci.vehicle.getRoadID(ego_id)
     curr_lane_index = traci.vehicle.getLaneIndex(ego_id)
 
+    # Lane ids are "{edge}_{laneIndex}". Target lane index is defined for the control-zone
+    # maneuver; on edges with fewer lanes (e.g. E2 has only E2_0) or on internal junction
+    # edges, indices like "_1" do not exist — do not call TraCI with invalid lane ids.
+    n_lanes_here = int(traci.edge.getLaneNumber(curr_edge_id))
+    cl = int(curr_lane_index)
+    tl_raw = int(target_lane_index)
+    if control_zone_edge is not None and curr_edge_id != control_zone_edge:
+        # Outside the control zone: no LC goal in the observation (same as "already in target").
+        tl = cl
+    else:
+        tl = tl_raw
     target_lane_id = None
-    try:
-        candidate_id = f"{curr_edge_id}_{int(target_lane_index)}"
-        _ = traci.lane.getLength(candidate_id)
-        target_lane_id = candidate_id
-    except traci.TraCIException:
-        target_lane_id = None
+    if 0 <= tl < n_lanes_here:
+        try:
+            candidate_id = f"{curr_edge_id}_{tl}"
+            _ = traci.lane.getLength(candidate_id)
+            target_lane_id = candidate_id
+        except traci.TraCIException:
+            target_lane_id = None
 
     # C0 / C2: current-lane leader & follower
     c0, c2 = _find_leader_follower_in_lane(ego_id, curr_lane_id)
 
     # C1 / C3: target-lane leader & follower (if target lane exists on this edge)
-    if target_lane_id is not None and int(target_lane_index) != int(curr_lane_index):
+    if target_lane_id is not None and tl != cl:
         c1, c3 = _find_leader_follower_in_lane(ego_id, target_lane_id)
     else:
         # Already in target lane (or target lane not present on this edge):
@@ -272,25 +294,135 @@ def get_state_with_info(
     _fill_neighbor_block(obs, START_C3, x_e, c3, ego_id)
 
     # --------- GOAL FEATURE: lane_error ---------
-    obs[IDX_LANE_ERROR] = float(int(target_lane_index) - int(curr_lane_index))
+    # Only meaningful while the target lane index exists on the current edge; otherwise
+    # treat as satisfied on this edge (e.g. post-commit single-lane exit E2).
+    if 0 <= tl < n_lanes_here:
+        obs[IDX_LANE_ERROR] = float(tl - cl)
+    else:
+        obs[IDX_LANE_ERROR] = 0.0
 
     validated = _validate_obs(obs)
     missing_neighbors = sum(v is None for v in (c0, c1, c2, c3))
+    lc_goal_in_obs = not (
+        control_zone_edge is not None and curr_edge_id != control_zone_edge
+    )
     return validated, {
         "ego_present": True,
         "target_lane_exists": target_lane_id is not None,
         "missing_neighbors": int(missing_neighbors),
         "state_valid": True,
-        "target_lane_index": int(target_lane_index),
+        "target_lane_index": int(tl_raw),
+        "effective_target_lane_index": int(tl),
+        "lc_goal_in_obs": bool(lc_goal_in_obs),
         "current_lane_index": int(curr_lane_index),
         "lane_error": float(obs[IDX_LANE_ERROR]),
+        "n_lanes_on_edge": int(n_lanes_here),
     }
 
 
 # ----------------- MAIN STATE EXTRACTION -----------------
-def get_state(ego_id: str, target_lane_index: int) -> np.ndarray:
+def get_state(
+    ego_id: str,
+    target_lane_index: int,
+    *,
+    control_zone_edge: str | None = None,
+) -> np.ndarray:
     """
     Backward-compatible wrapper returning only the observation vector.
     """
-    obs, _ = get_state_with_info(ego_id, target_lane_index)
+    obs, _ = get_state_with_info(
+        ego_id, target_lane_index, control_zone_edge=control_zone_edge
+    )
     return obs
+
+
+def collect_neighbor_lane_evidence(
+    ego_id: str,
+    target_lane_index: int,
+    *,
+    control_zone_edge: str | None = None,
+) -> dict:
+    """
+    TraCI-backed facts for tests and reports: which lanes C0–C3 are resolved on.
+
+    SUMO convention (driving direction): lane index **increases to the left** of the
+    vehicle; index 0 is the rightmost lane on the edge. With
+    ``lane_error = target_lane_index - current_lane_index``, a **left** adjacent
+    target has ``lane_error == +1`` and a **right** adjacent target has ``lane_error == -1``.
+
+    Returns:
+        Dict with lane ids, neighbor vehicle ids, and booleans that C1/C3 vehicles
+        lie on the resolved target lane id (when those neighbors exist).
+    """
+    out: dict = {
+        "ego_present": False,
+        "curr_edge_id": None,
+        "curr_lane_idx": None,
+        "curr_lane_id": None,
+        "target_lane_idx": int(target_lane_index),
+        "target_lane_id": None,
+        "target_lane_exists": False,
+        "n_lanes_on_edge": None,
+        "c0_leader_id": None,
+        "c1_leader_id": None,
+        "c2_follower_id": None,
+        "c3_follower_id": None,
+        "c1_on_target_lane": None,
+        "c3_on_target_lane": None,
+    }
+    if ego_id not in traci.vehicle.getIDList():
+        return out
+    out["ego_present"] = True
+    try:
+        curr_lane_id = traci.vehicle.getLaneID(ego_id)
+        curr_edge_id = traci.vehicle.getRoadID(ego_id)
+        curr_lane_idx = int(traci.vehicle.getLaneIndex(ego_id))
+        n_lanes = int(traci.edge.getLaneNumber(curr_edge_id))
+    except traci.TraCIException:
+        return out
+
+    out["curr_lane_id"] = str(curr_lane_id)
+    out["curr_edge_id"] = str(curr_edge_id)
+    out["curr_lane_idx"] = curr_lane_idx
+    out["n_lanes_on_edge"] = n_lanes
+
+    tl_raw = int(target_lane_index)
+    if control_zone_edge is not None and curr_edge_id != control_zone_edge:
+        tl = int(curr_lane_idx)
+    else:
+        tl = tl_raw
+    out["target_lane_idx_effective"] = tl
+
+    target_lane_id = None
+    if 0 <= tl < n_lanes:
+        try:
+            candidate = f"{curr_edge_id}_{tl}"
+            _ = traci.lane.getLength(candidate)
+            target_lane_id = candidate
+        except traci.TraCIException:
+            target_lane_id = None
+    out["target_lane_id"] = target_lane_id
+    out["target_lane_exists"] = target_lane_id is not None
+
+    c0, c2 = _find_leader_follower_in_lane(ego_id, curr_lane_id)
+    if target_lane_id is not None and tl != curr_lane_idx:
+        c1, c3 = _find_leader_follower_in_lane(ego_id, target_lane_id)
+    else:
+        c1 = c3 = None
+
+    out["c0_leader_id"] = c0
+    out["c1_leader_id"] = c1
+    out["c2_follower_id"] = c2
+    out["c3_follower_id"] = c3
+
+    def _vid_on_lane(vid: str | None, lane_id: str | None) -> bool | None:
+        if vid is None or lane_id is None:
+            return None
+        try:
+            return str(traci.vehicle.getLaneID(vid)) == str(lane_id)
+        except traci.TraCIException:
+            return None
+
+    out["c1_on_target_lane"] = _vid_on_lane(c1, target_lane_id)
+    out["c3_on_target_lane"] = _vid_on_lane(c3, target_lane_id)
+    return out

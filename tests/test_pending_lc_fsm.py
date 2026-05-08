@@ -4,6 +4,8 @@ import unittest
 
 from envs.sumo_lanechange_env import compute_pending_lc_fsm_outcome
 
+_CZ = "control_zone_edge_1"
+
 
 class TestPendingLcFsm(unittest.TestCase):
     def test_not_pending_noop(self):
@@ -15,6 +17,7 @@ class TestPendingLcFsm(unittest.TestCase):
             lc_start_step=5,
             steps=10,
             lc_max_steps=20,
+            control_zone_edge=_CZ,
         )
         self.assertEqual((s, r, c), (False, None, False))
 
@@ -28,6 +31,7 @@ class TestPendingLcFsm(unittest.TestCase):
             lc_start_step=5,
             steps=10,
             lc_max_steps=20,
+            control_zone_edge=_CZ,
         )
         self.assertEqual((s, r, c), (False, None, False))
 
@@ -41,6 +45,7 @@ class TestPendingLcFsm(unittest.TestCase):
             lc_start_step=5,
             steps=10,
             lc_max_steps=20,
+            control_zone_edge=_CZ,
         )
         self.assertEqual((s, r, c), (False, None, False))
 
@@ -54,6 +59,7 @@ class TestPendingLcFsm(unittest.TestCase):
             lc_start_step=5,
             steps=10,
             lc_max_steps=20,
+            control_zone_edge=_CZ,
         )
         self.assertEqual((s, r, c), (False, None, False))
 
@@ -66,6 +72,8 @@ class TestPendingLcFsm(unittest.TestCase):
             lc_start_step=5,
             steps=12,
             lc_max_steps=20,
+            control_zone_edge=_CZ,
+            curr_edge=_CZ,
         )
         self.assertEqual((s, r, c), (True, None, True))
 
@@ -78,6 +86,7 @@ class TestPendingLcFsm(unittest.TestCase):
             lc_start_step=5,
             steps=5 + 21,
             lc_max_steps=20,
+            control_zone_edge=_CZ,
         )
         self.assertEqual((s, r, c), (False, "lc_timeout", True))
 
@@ -90,6 +99,7 @@ class TestPendingLcFsm(unittest.TestCase):
             lc_start_step=5,
             steps=5 + 20,
             lc_max_steps=20,
+            control_zone_edge=_CZ,
         )
         self.assertEqual((s, r, c), (False, None, False))
 

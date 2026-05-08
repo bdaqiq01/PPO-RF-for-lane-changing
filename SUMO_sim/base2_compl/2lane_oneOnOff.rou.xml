@@ -10,6 +10,8 @@
     <!-- Current: ~1800 veh/hour total - still dense but manageable -->
     <!-- CRITICAL: f_target_lane ensures lane 0 (target lane) always has traffic -->
     <flow id="f_0" begin="0.00" departLane="random" departPos="random" departSpeed="random" from="E0" to="E0.497" via="E0.212" end="3600.00" vehsPerHour="300"/>
+    <!-- f_2: MUST use to=E0.497 — E0 merges into E0.212 lanes 1–2 only; those lanes route to E0.497 (see net connections). -->
+    <!-- E2 is reached only via E0.212 lane 0 (on-ramp f_onramp_to_offramp). After LC to lane 0, changeTarget(E2) sets mainline exit. -->
     <flow id="f_2" begin="0.00" departLane="0" departPos="random" departSpeed="random" from="E0" to="E0.497" via="E0.212" end="3600.00" vehsPerHour="250"/>
     <!-- Dedicated flow for target lane (lane 0) to ensure it's never empty -->
     <flow id="f_target_lane" begin="0.00" departLane="0" departPos="random" departSpeed="random" from="E0" to="E0.497" via="E0.212" end="3600.00" vehsPerHour="400"/>

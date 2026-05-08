@@ -1,5 +1,12 @@
 # utils/reward_functions.py
-
+#
+# Intended reward semantics (see SumoLaneChangeEnv._reward_for_transition):
+#   - Dense Ye-style terms (comfort, efficiency, safety gaps, R_p, collision)
+#     apply only when the policy controls the ego **inside the control zone**.
+#   - Outside that, dense terms are zero; sparse LC shaping (success / timeout /
+#     truncated-incomplete) may still apply.
+#   - Terminal collision still runs full compute_reward once (large penalty).
+#
 from dataclasses import dataclass
 import numpy as np
 import traci
@@ -7,8 +14,7 @@ import traci
 from utils.state_extraction import (
     IDX_PY_EGO,
     IDX_VY_EGO,
-    IDX_AY_EGO,
-    IDX_PX_EGO,
+    IDX_AX_EGO,
     IDX_VX_EGO,
     START_C0,
     START_C1,
@@ -46,7 +52,9 @@ def compute_reward(
               = R_comfort + R_efficiency + (R_collision + R_p)
 
     Inputs:
-      obs_t, obs_tp1 : 21-d states at t and t+1
+      obs_t, obs_tp1 : observation vectors at t and t+1 (22-d goal-conditioned
+      layout from state_extraction, or any array where indices 0..20 match the
+      Ye et al. ego+neighbors block; index 21 ``lane_error`` is ignored here).
       ego_id         : SUMO ego vehicle id (for lane info)
       lat_cmd        : lateral action actually executed (0/1/2)
       dt             : simulation step length
@@ -60,16 +68,19 @@ def compute_reward(
     """
 
     # ---------------- 1) COMFORT (Eq. 5): jerk penalties ----------------
-    ay_t = float(obs_t[IDX_AY_EGO])
-    ay_next = float(obs_tp1[IDX_AY_EGO])
+    ax_t = float(obs_t[IDX_AX_EGO])
+    ax_next = float(obs_tp1[IDX_AX_EGO])
 
     vx_t = float(obs_t[IDX_VX_EGO])
     vx_next = float(obs_tp1[IDX_VX_EGO])
+    vy_t = float(obs_t[IDX_VY_EGO])
+    vy_next = float(obs_tp1[IDX_VY_EGO])
 
     dt_safe = max(dt, 1e-6)
 
-    j_lon = (ay_next - ay_t) / dt_safe
-    j_lat = (vx_next - vx_t) / dt_safe
+    # Longitudinal jerk ~ d(ax)/dt; lateral jerk ~ d(vy)/dt (lateral speed rate).
+    j_lon = (ax_next - ax_t) / dt_safe
+    j_lat = (vy_next - vy_t) / dt_safe
 
     R_comfort = -weights.alpha * (j_lon ** 2) - weights.beta * (j_lat ** 2)
 
@@ -77,25 +88,13 @@ def compute_reward(
     # R_time = -Δt
     R_time = -dt
 
-    # R_lane = -|P_x - P_x*|
-    px_next = float(obs_tp1[IDX_PX_EGO])
+    # Lateral offset from lane center: use ego lateral lane position (Py), not Px.
+    # Py* ≈ 0 at lane center in SUMO lane coordinates.
+    py_next = float(obs_tp1[IDX_PY_EGO])
+    R_lane = -abs(py_next)
 
-    # Approximate target lane center as lateral center of lane to the right (if exists)
-    try:
-        curr_idx = traci.vehicle.getLaneIndex(ego_id)
-        road_id = traci.vehicle.getRoadID(ego_id)
-        target_idx = curr_idx if curr_idx == 0 else curr_idx - 1
-        target_lane_id = f"{road_id}_{target_idx}"
-        _ = traci.lane.getLength(target_lane_id)  # just to assert it exists
-        px_star = 0.0   # center of lane in SUMO's lateral coords
-    except traci.TraCIException:
-        px_star = 0.0
-
-    R_lane = -abs(px_next - px_star)
-
-    # R_speed = -|V_y - V_desired|
-    vy_next = float(obs_tp1[IDX_VY_EGO])
-    R_speed = -abs(vy_next - v_desired)
+    # Longitudinal speed: desired speed should compare to Vx, not Vy.
+    R_speed = -abs(vx_next - v_desired)
 
     R_eff = (
         weights.wt * R_time +
@@ -104,23 +103,32 @@ def compute_reward(
     )
 
     # ---------------- 3) SAFETY (near-collision + collision + R_p) ----------------
-    # F(Ce, Ci) = -1 / (|Δy_i| + 0.1), where Δy_i = Py_i - Py_e
-    def F(dy: float) -> float:
-        if abs(dy) > 900.0:  # Placeholder value means no vehicle
-            return 0.0  # No penalty if vehicle doesn't exist
-        return -1.0 / (abs(dy) + 0.1)
+    # Neighbor blocks are [Dx, Vx, Ax, Py]. Longitudinal gaps use Dx (index +0);
+    # lateral separation for F uses Py delta vs ego (index +3).
+    # F(Ce, Ci) = -1 / (|Py_i - Py_e| + 0.1) using neighbor lateral positions.
+    def F_lateral_py(py_neighbor: float, py_ego: float) -> float:
+        d = float(py_neighbor) - float(py_ego)
+        return -1.0 / (abs(d) + 0.1)
 
-    # Δy_i at t+1 (post-action state)
-    dy_c0 = float(obs_tp1[START_C0 + 0])
-    dy_c1 = float(obs_tp1[START_C1 + 0])
-    dy_c2 = float(obs_tp1[START_C2 + 0])
-    dy_c3 = float(obs_tp1[START_C3 + 0])
+    py_ego_n = float(obs_tp1[IDX_PY_EGO])
+
+    def neighbor_py(start: int) -> float:
+        return float(obs_tp1[start + 3])
+
+    def neighbor_dx(start: int) -> float:
+        return float(obs_tp1[start + 0])
+
+    py_c0 = neighbor_py(START_C0)
+    py_c1 = neighbor_py(START_C1)
+    py_c2 = neighbor_py(START_C2)
+    py_c3 = neighbor_py(START_C3)
 
     # Overall min longitudinal distance (Eq. 8) - filter out placeholders
     gaps = []
-    for dy in [dy_c0, dy_c1, dy_c2, dy_c3]:
-        if abs(dy) < 900.0:  # Only consider real vehicles
-            gaps.append(abs(dy))
+    for start in (START_C0, START_C1, START_C2, START_C3):
+        dx = neighbor_dx(start)
+        if abs(dx) < 900.0:  # Only consider real vehicles
+            gaps.append(abs(dx))
     D = min(gaps) if gaps else float('inf')  # If no vehicles, D = infinity
 
     # Check collision: ego removed from simulation
@@ -129,24 +137,25 @@ def compute_reward(
     except traci.TraCIException:
         collided = False
 
-    # Near-collision contribution (Table II):
+    # Near-collision contribution (Table II) — lateral F on Py deltas; only if gap D < ds
     R_near = 0.0
-    if (not collided) and (D < ds):  # Now D correctly ignores placeholders
-        if lat_cmd == 0:  # keep lane -> use target leader C1
-            R_near = F(dy_c1)  # F() now returns 0.0 if no vehicle
+    if (not collided) and (D < ds):
+        if lat_cmd == 0:  # keep lane -> target-lane leader C1
+            if abs(neighbor_dx(START_C1)) < 900.0:
+                R_near = F_lateral_py(py_c1, py_ego_n)
         elif lat_cmd == 1:  # change lane -> min(F(C1), F(C3))
             vals = []
-            if abs(dy_c1) < 900.0:
-                vals.append(F(dy_c1))
-            if abs(dy_c3) < 900.0:
-                vals.append(F(dy_c3))
+            if abs(neighbor_dx(START_C1)) < 900.0:
+                vals.append(F_lateral_py(py_c1, py_ego_n))
+            if abs(neighbor_dx(START_C3)) < 900.0:
+                vals.append(F_lateral_py(py_c3, py_ego_n))
             R_near = min(vals) if vals else 0.0
         elif lat_cmd == 2:  # abort -> min(F(C0), F(C2))
             vals = []
-            if abs(dy_c0) < 900.0:
-                vals.append(F(dy_c0))
-            if abs(dy_c2) < 900.0:
-                vals.append(F(dy_c2))
+            if abs(neighbor_dx(START_C0)) < 900.0:
+                vals.append(F_lateral_py(py_c0, py_ego_n))
+            if abs(neighbor_dx(START_C2)) < 900.0:
+                vals.append(F_lateral_py(py_c2, py_ego_n))
             R_near = min(vals) if vals else 0.0
 
 
